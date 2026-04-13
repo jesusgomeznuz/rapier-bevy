@@ -12,9 +12,14 @@ pub enum ColliderShape {
     MeshObject { model_name: &'static str },
 }
 
+#[allow(dead_code)]
 pub enum BodyType {
     Static,
     Dynamic,
+}
+
+pub enum JointDef {
+    Revolute { axis: Vec3, local_anchor: Vec3 },
 }
 
 pub struct ObjectDef {
@@ -23,6 +28,7 @@ pub struct ObjectDef {
     pub body: BodyType,
     pub friction: Option<f32>,
     pub restitution: Option<f32>,
+    pub joint: Option<JointDef>,
 }
 
 impl Default for ObjectDef {
@@ -33,6 +39,7 @@ impl Default for ObjectDef {
             body: BodyType::Static,
             friction: None,
             restitution: None,
+            joint: None,
         }
     }
 }
@@ -45,6 +52,12 @@ pub fn preprocess_assets() {
 }
 
 pub fn spawn_object(commands: &mut Commands, def: ObjectDef, mode: &SimMode) {
+    let anchor = def.joint.as_ref().map(|joint| match joint {
+        JointDef::Revolute { local_anchor, .. } => commands
+            .spawn((RigidBody::Fixed, Transform::from_translation(def.position + *local_anchor)))
+            .id(),
+    });
+
     let mut entity = commands.spawn((
         colliders::build_collider(def.shape, mode),
         Transform::from_translation(def.position),
@@ -58,5 +71,15 @@ pub fn spawn_object(commands: &mut Commands, def: ObjectDef, mode: &SimMode) {
     }
     if let Some(r) = def.restitution {
         entity.insert(Restitution::coefficient(r));
+    }
+    if let (Some(joint_def), Some(anchor_entity)) = (def.joint, anchor) {
+        match joint_def {
+            JointDef::Revolute { axis, local_anchor } => {
+                entity.insert(ImpulseJoint::new(anchor_entity, RevoluteJointBuilder::new(axis)
+                    .local_anchor1(Vec3::ZERO)
+                    .local_anchor2(local_anchor)
+                    .build()));
+            }
+        }
     }
 }
