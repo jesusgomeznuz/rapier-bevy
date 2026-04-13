@@ -1,3 +1,4 @@
+use crate::modes::SimMode;
 use bevy::prelude::*;
 use bevy_rapier3d::{
     parry::{
@@ -12,8 +13,7 @@ pub enum ColliderShape {
     Box { hx: f32, hy: f32, hz: f32 },
     Sphere { radius: f32 },
     Capsule { half_height: f32, radius: f32 },
-    Compound { model_name: &'static str },
-    RawMesh { obj_path: &'static str },
+    MeshObject { model_name: &'static str },
 }
 
 pub enum BodyType {
@@ -41,9 +41,16 @@ impl Default for ObjectDef {
     }
 }
 
-pub fn spawn_object(commands: &mut Commands, def: ObjectDef) {
+pub fn preprocess_assets() {
+    let start = std::time::Instant::now();
+    preprocess_obj("assets/half_ring.obj", "assets/half_ring.compound");
+    preprocess_obj("assets/gear.obj",      "assets/gear.compound");
+    println!("[preprocess] total: {:.2?}", start.elapsed());
+}
+
+pub fn spawn_object(commands: &mut Commands, def: ObjectDef, mode: &SimMode) {
     let mut entity = commands.spawn((
-        build_collider(def.shape),
+        build_collider(def.shape, mode),
         Transform::from_translation(def.position),
     ));
 
@@ -81,13 +88,15 @@ pub fn preprocess_obj(obj_path: &str, output_path: &str) {
     println!("  -> {} convex pieces in {:.2?}", parts.len(), start.elapsed());
 }
 
-fn build_collider(shape: ColliderShape) -> Collider {
+fn build_collider(shape: ColliderShape, mode: &SimMode) -> Collider {
     match shape {
-        ColliderShape::Box { hx, hy, hz }      => Collider::cuboid(hx, hy, hz),
-        ColliderShape::Sphere { radius }        => Collider::ball(radius),
+        ColliderShape::Box { hx, hy, hz }          => Collider::cuboid(hx, hy, hz),
+        ColliderShape::Sphere { radius }            => Collider::ball(radius),
         ColliderShape::Capsule { half_height, radius } => Collider::capsule_y(half_height, radius),
-        ColliderShape::Compound { model_name }  => load_compound(model_name),
-        ColliderShape::RawMesh { obj_path }     => decompose_obj(obj_path),
+        ColliderShape::MeshObject { model_name }   => match mode {
+            SimMode::Precomputed => load_compound(model_name),
+            SimMode::Raw         => decompose_obj(&format!("assets/{}.obj", model_name)),
+        },
     }
 }
 
