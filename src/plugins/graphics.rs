@@ -11,6 +11,6 @@ impl Plugin for GraphicsPlugin {
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, 2.5, 14.0).looking_at(Vec3::new(0.0, 1.5, 0.0), Vec3::Y),
+        Transform::from_xyz(6.0, 3.0, 25.0).looking_at(Vec3::new(6.0, 1.5, 0.0), Vec3::Y),
     ));
 }

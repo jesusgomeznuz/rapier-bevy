@@ -49,6 +49,9 @@ fn show_fps_in_title(
 fn setup_world(mut commands: Commands, mode: Res<SimMode>) {
     let start = std::time::Instant::now();
 
+    let angular_damping = 0.6_f32;
+    let linear_damping = 0.6_f32;
+
     spawn_object(
         &mut commands,
         ObjectDef {
@@ -57,7 +60,7 @@ fn setup_world(mut commands: Commands, mode: Res<SimMode>) {
                 hy: 0.1,
                 hz: 100.0,
             },
-            position: Vec3::new(0.0, -2.0, 0.0),
+            position: Vec3::new(0.0, -3.0, 0.0),
             ..Default::default()
         },
         &mode,
@@ -73,6 +76,8 @@ fn setup_world(mut commands: Commands, mode: Res<SimMode>) {
             },
             radius: 0.08,
             anchored: true,
+            angular_damping,
+            linear_damping,
         },
     );
 
@@ -86,6 +91,8 @@ fn setup_world(mut commands: Commands, mode: Res<SimMode>) {
             },
             radius: 0.08,
             anchored: true,
+            angular_damping,
+            linear_damping,
         },
     );
 
@@ -102,6 +109,8 @@ fn setup_world(mut commands: Commands, mode: Res<SimMode>) {
             },
             radius: 0.08,
             anchored: true,
+            angular_damping,
+            linear_damping,
         },
     );
 

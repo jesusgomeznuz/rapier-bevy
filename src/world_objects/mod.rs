@@ -32,9 +32,11 @@ pub enum ChainPath {
 }
 
 pub struct ChainDef {
-    pub path:     ChainPath,
-    pub radius:   f32,
-    pub anchored: bool,
+    pub path:             ChainPath,
+    pub radius:           f32,
+    pub anchored:         bool,
+    pub angular_damping:  f32,
+    pub linear_damping:   f32,
 }
 
 pub struct ObjectDef {
@@ -156,6 +158,7 @@ pub fn spawn_chain(commands: &mut Commands, def: ChainDef) {
             collider.clone(),
             RigidBody::Dynamic,
             Transform::from_translation(center).with_rotation(rotation),
+            Damping { angular_damping: def.angular_damping, linear_damping: def.linear_damping },
         ));
 
         if let Some((parent_entity, parent_center, parent_rotation)) = prev {
