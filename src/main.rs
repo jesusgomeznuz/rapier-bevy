@@ -71,7 +71,6 @@ fn setup_world(mut commands: Commands, mode: Res<SimMode>) {
                 direction: Vec3::NEG_Y,
                 length: 4.0,
             },
-            segments: 10,
             radius: 0.08,
             anchored: true,
         },
@@ -85,25 +84,23 @@ fn setup_world(mut commands: Commands, mode: Res<SimMode>) {
                 direction: Vec3::X,
                 length: 3.0,
             },
-            segments: 8,
             radius: 0.08,
             anchored: true,
         },
     );
 
-    // hélice 3 loops, r=0.25, drop=3.0 — arco: sqrt((2π·0.25·3)² + 3²) ≈ 5.6m
+    // arco 90° en plano XY, r=3.0 — arco: (π/2)·3 ≈ 4.71m
     spawn_chain(
         &mut commands,
         ChainDef {
             path: ChainPath::Curve {
                 sample: Box::new(|t| {
-                    let angle = t * std::f32::consts::TAU * 3.0;
-                    Vec3::new(3.5 + angle.cos() * 0.25, 4.5 - t * 3.0, angle.sin() * 0.25)
+                    let angle = std::f32::consts::FRAC_PI_2 * (1.0 - t);
+                    Vec3::new(3.5 + angle.cos() * 3.0, 1.5 + angle.sin() * 3.0, 0.0)
                 }),
-                length: 5.6,
+                length: std::f32::consts::FRAC_PI_2 * 3.0,
             },
-            segments: 48,
-            radius: 0.04,
+            radius: 0.08,
             anchored: true,
         },
     );

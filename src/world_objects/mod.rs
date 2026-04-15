@@ -22,6 +22,10 @@ pub enum JointDef {
     Revolute { axis: Vec3, local_anchor: Vec3 },
 }
 
+// Relación longitud_eslabón / radio_eslabón. Calibrado con los 3 ejemplos base
+// (vertical 10seg, horizontal 8seg, arco 12seg). Bajar = más densidad, subir = menos.
+const LINK_LENGTH_TO_RADIUS: f32 = 5.0;
+
 pub enum ChainPath {
     Linear { start: Vec3, direction: Vec3, length: f32 },
     Curve  { sample: Box<dyn Fn(f32) -> Vec3>, length: f32 },
@@ -29,7 +33,6 @@ pub enum ChainPath {
 
 pub struct ChainDef {
     pub path:     ChainPath,
-    pub segments: u32,
     pub radius:   f32,
     pub anchored: bool,
 }
@@ -109,7 +112,8 @@ pub fn spawn_chain(commands: &mut Commands, def: ChainDef) {
         ChainPath::Curve  { length, sample }    => (*length, sample(0.0)),
     };
 
-    let link_length = total_length / def.segments as f32;
+    let link_length = def.radius * LINK_LENGTH_TO_RADIUS;
+    let segments    = (total_length / link_length).ceil() as u32;
     let link_half   = link_length / 2.0;
     let half_height = (link_half - def.radius).max(0.001);
     let collider    = Collider::capsule_y(half_height, def.radius);
@@ -131,9 +135,9 @@ pub fn spawn_chain(commands: &mut Commands, def: ChainDef) {
         None
     };
 
-    for i in 0..def.segments {
-        let t   = (i as f32 + 0.5) / def.segments as f32;
-        let eps = 0.5 / def.segments as f32;
+    for i in 0..segments {
+        let t   = (i as f32 + 0.5) / segments as f32;
+        let eps = 0.5 / segments as f32;
 
         let (center, tangent) = match &def.path {
             ChainPath::Linear { start, direction, .. } => {
@@ -159,9 +163,12 @@ pub fn spawn_chain(commands: &mut Commands, def: ChainDef) {
                 // el anchor fija su propio centro; el eslabón conecta por su extremo trasero
                 (Vec3::ZERO, rotation.inverse() * (anchor_point - center))
             } else {
-                // el punto de conexión es el midpoint entre centros adyacentes,
-                // expresado en espacio local de cada body
-                let connection = (parent_center + center) / 2.0;
+                // el punto de conexión es el midpoint entre las puntas reales de las cápsulas
+                // (no entre centros) — para curvas donde los eslabones tienen distinta orientación,
+                // usar centros pone el anchor dentro de ambos cuerpos causando traslape visual
+                let parent_tip  = parent_center + parent_rotation * Vec3::new(0.0,  link_half, 0.0);
+                let child_tail  = center        + rotation        * Vec3::new(0.0, -link_half, 0.0);
+                let connection  = (parent_tip + child_tail) / 2.0;
                 (parent_rotation.inverse() * (connection - parent_center),
                  rotation.inverse() * (connection - center))
             };
@@ -172,11 +179,20 @@ pub fn spawn_chain(commands: &mut Commands, def: ChainDef) {
                         .local_anchor1(parent_local)
                         .local_anchor2(child_local)
                         .build()),
-                ChainPath::Curve { .. } => ImpulseJoint::new(parent_entity,
-                    SphericalJointBuilder::new()
-                        .local_anchor1(parent_local)
-                        .local_anchor2(child_local)
-                        .build()),
+                ChainPath::Curve { .. } => {
+                    // eje de bisagra calculado por eslabón desde la tangente local —
+                    // previene el giro libre sobre el eje del eslabón (bug con SphericalJoint)
+                    let world_axis = {
+                        let perp = tangent.cross(Vec3::Y);
+                        if perp.length_squared() > 0.001 { perp.normalize() } else { Vec3::Z }
+                    };
+                    let local_axis = parent_rotation.inverse() * world_axis;
+                    ImpulseJoint::new(parent_entity,
+                        RevoluteJointBuilder::new(local_axis)
+                            .local_anchor1(parent_local)
+                            .local_anchor2(child_local)
+                            .build())
+                },
             });
         }
 
