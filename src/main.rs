@@ -19,6 +19,9 @@ fn main() {
     }
 }
 
+#[derive(Component)]
+struct PerfOverlay;
+
 fn run_simulation(mode: SimMode) {
     App::new()
         .add_plugins(DefaultPlugins)
@@ -27,22 +30,42 @@ fn run_simulation(mode: SimMode) {
         .add_plugins(RapierDebugRenderPlugin::default())
         .add_plugins(GraphicsPlugin)
         .insert_resource(mode)
-        .add_systems(Startup, setup_world)
-        .add_systems(Update, show_fps_in_title)
+        .add_systems(Startup, (setup_world, setup_perf_overlay))
+        .add_systems(Update, update_perf_overlay)
         .run();
 }
 
-fn show_fps_in_title(
+fn setup_perf_overlay(mut commands: Commands) {
+    commands.spawn((
+        Text::new(""),
+        TextFont { font_size: 14.0, ..default() },
+        TextColor(Color::WHITE),
+        Node {
+            position_type: PositionType::Absolute,
+            top:  Val::Px(8.0),
+            left: Val::Px(8.0),
+            ..default()
+        },
+        PerfOverlay,
+    ));
+}
+
+fn update_perf_overlay(
     diagnostics: Res<DiagnosticsStore>,
-    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    bodies:      Query<&RigidBody>,
+    joints:      Query<&ImpulseJoint>,
+    mut overlay: Query<&mut Text, With<PerfOverlay>>,
 ) {
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
 
-    if let Ok(mut window) = windows.single_mut() {
-        window.title = format!("rapier-bevy — {fps:.0} fps");
+    let n_dynamic = bodies.iter().filter(|rb| matches!(rb, RigidBody::Dynamic)).count();
+    let n_joints  = joints.iter().count();
+
+    if let Ok(mut text) = overlay.single_mut() {
+        **text = format!("{fps:.0} fps\nbodies  {n_dynamic}\njoints  {n_joints}");
     }
 }
 
