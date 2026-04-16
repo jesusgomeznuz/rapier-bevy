@@ -27,16 +27,23 @@ pub enum JointDef {
 const LINK_LENGTH_TO_RADIUS: f32 = 5.0;
 
 pub enum ChainPath {
-    Linear { start: Vec3, direction: Vec3, length: f32 },
-    Curve  { sample: Box<dyn Fn(f32) -> Vec3>, length: f32 },
+    Linear {
+        start: Vec3,
+        direction: Vec3,
+        length: f32,
+    },
+    Curve {
+        sample: Box<dyn Fn(f32) -> Vec3>,
+        length: f32,
+    },
 }
 
 pub struct ChainDef {
-    pub path:             ChainPath,
-    pub radius:           f32,
-    pub anchored:         bool,
-    pub angular_damping:  f32,
-    pub linear_damping:   f32,
+    pub path: ChainPath,
+    pub radius: f32,
+    pub anchored: bool,
+    pub angular_damping: f32,
+    pub linear_damping: f32,
 }
 
 pub struct ObjectDef {
@@ -48,12 +55,17 @@ pub struct ObjectDef {
     pub restitution: Option<f32>,
     pub angular_damping: Option<f32>,
     pub joint: Option<JointDef>,
+    pub velocity: Option<Vec3>,
 }
 
 impl Default for ObjectDef {
     fn default() -> Self {
         Self {
-            shape: ColliderShape::Box { hx: 1.0, hy: 1.0, hz: 1.0 },
+            shape: ColliderShape::Box {
+                hx: 1.0,
+                hy: 1.0,
+                hz: 1.0,
+            },
             position: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             body: BodyType::Static,
@@ -61,6 +73,7 @@ impl Default for ObjectDef {
             restitution: None,
             angular_damping: None,
             joint: None,
+            velocity: None,
         }
     }
 }
@@ -85,7 +98,9 @@ pub fn spawn_stacked_boxes(commands: &mut Commands, count: u32) {
     'outer: for row in 0..cols {
         for col in 0..cols {
             for stack in 0..cols {
-                if spawned >= count { break 'outer; }
+                if spawned >= count {
+                    break 'outer;
+                }
                 commands.spawn((
                     Collider::cuboid(0.5, 0.5, 0.5),
                     RigidBody::Dynamic,
@@ -106,31 +121,36 @@ pub fn spawn_chain_grid(commands: &mut Commands, count: u32) {
     for i in 0..count {
         let x = (i % cols) as f32 * 3.0 - (cols as f32 * 1.5);
         let z = (i / cols) as f32 * 3.0 - (cols as f32 * 1.5);
-        spawn_chain(commands, ChainDef {
-            path: ChainPath::Linear {
-                start:     Vec3::new(x, 6.0, z),
-                direction: Vec3::NEG_Y,
-                length:    4.0,
+        spawn_chain(
+            commands,
+            ChainDef {
+                path: ChainPath::Linear {
+                    start: Vec3::new(x, 6.0, z),
+                    direction: Vec3::NEG_Y,
+                    length: 4.0,
+                },
+                radius: 0.08,
+                anchored: true,
+                angular_damping: 0.5,
+                linear_damping: 0.5,
             },
-            radius:          0.08,
-            anchored:        true,
-            angular_damping: 0.5,
-            linear_damping:  0.5,
-        });
+        );
     }
 }
 
 pub fn preprocess_assets() {
     let start = std::time::Instant::now();
-    colliders::preprocess_obj("assets/half_ring.obj", "assets/half_ring.compound");
-    colliders::preprocess_obj("assets/gear.obj",      "assets/gear.compound");
+    colliders::preprocess_obj("assets/vehicle-racer.obj", "assets/vehicle-racer.compound");
     println!("[preprocess] total: {:.2?}", start.elapsed());
 }
 
 pub fn spawn_object(commands: &mut Commands, def: ObjectDef, mode: &SimMode) {
     let anchor = def.joint.as_ref().map(|joint| match joint {
         JointDef::Revolute { local_anchor, .. } => commands
-            .spawn((RigidBody::Fixed, Transform::from_translation(def.position + *local_anchor)))
+            .spawn((
+                RigidBody::Fixed,
+                Transform::from_translation(def.position + *local_anchor),
+            ))
             .id(),
     });
 
@@ -149,15 +169,24 @@ pub fn spawn_object(commands: &mut Commands, def: ObjectDef, mode: &SimMode) {
         entity.insert(Restitution::coefficient(r));
     }
     if let Some(d) = def.angular_damping {
-        entity.insert(Damping { angular_damping: d, linear_damping: 0.0 });
+        entity.insert(Damping {
+            angular_damping: d,
+            linear_damping: 0.0,
+        });
+    }
+    if let Some(v) = def.velocity {
+        entity.insert(Velocity { linvel: v, angvel: Vec3::ZERO });
     }
     if let (Some(joint_def), Some(anchor_entity)) = (def.joint, anchor) {
         match joint_def {
             JointDef::Revolute { axis, local_anchor } => {
-                entity.insert(ImpulseJoint::new(anchor_entity, RevoluteJointBuilder::new(axis)
-                    .local_anchor1(Vec3::ZERO)
-                    .local_anchor2(local_anchor)
-                    .build()));
+                entity.insert(ImpulseJoint::new(
+                    anchor_entity,
+                    RevoluteJointBuilder::new(axis)
+                        .local_anchor1(Vec3::ZERO)
+                        .local_anchor2(local_anchor)
+                        .build(),
+                ));
             }
         }
     }
@@ -166,38 +195,46 @@ pub fn spawn_object(commands: &mut Commands, def: ObjectDef, mode: &SimMode) {
 pub fn spawn_chain(commands: &mut Commands, def: ChainDef) {
     let (total_length, anchor_point) = match &def.path {
         ChainPath::Linear { length, start, .. } => (*length, *start),
-        ChainPath::Curve  { length, sample }    => (*length, sample(0.0)),
+        ChainPath::Curve { length, sample } => (*length, sample(0.0)),
     };
 
     let link_length = def.radius * LINK_LENGTH_TO_RADIUS;
-    let segments    = (total_length / link_length).ceil() as u32;
-    let link_half   = link_length / 2.0;
+    let segments = (total_length / link_length).ceil() as u32;
+    let link_half = link_length / 2.0;
     let half_height = (link_half - def.radius).max(0.001);
-    let collider    = Collider::capsule_y(half_height, def.radius);
+    let collider = Collider::capsule_y(half_height, def.radius);
 
     let hinge_axis = match &def.path {
         ChainPath::Linear { direction, .. } => {
             let dir = direction.normalize();
             let perpendicular = dir.cross(Vec3::Y);
-            if perpendicular.length_squared() > 0.001 { perpendicular.normalize() } else { Vec3::Z }
+            if perpendicular.length_squared() > 0.001 {
+                perpendicular.normalize()
+            } else {
+                Vec3::Z
+            }
         }
         ChainPath::Curve { .. } => Vec3::Z,
     };
 
     // prev: (Entity, center en mundo, rotación en mundo)
     let mut prev: Option<(Entity, Vec3, Quat)> = if def.anchored {
-        let e = commands.spawn((RigidBody::Fixed, Transform::from_translation(anchor_point))).id();
+        let e = commands
+            .spawn((RigidBody::Fixed, Transform::from_translation(anchor_point)))
+            .id();
         Some((e, anchor_point, Quat::IDENTITY))
     } else {
         None
     };
 
     for i in 0..segments {
-        let t   = (i as f32 + 0.5) / segments as f32;
+        let t = (i as f32 + 0.5) / segments as f32;
         let eps = 0.5 / segments as f32;
 
         let (center, tangent) = match &def.path {
-            ChainPath::Linear { start, direction, .. } => {
+            ChainPath::Linear {
+                start, direction, ..
+            } => {
                 let dir = direction.normalize();
                 (*start + dir * link_length * (i as f32 + 0.5), dir)
             }
@@ -213,7 +250,10 @@ pub fn spawn_chain(commands: &mut Commands, def: ChainDef) {
             collider.clone(),
             RigidBody::Dynamic,
             Transform::from_translation(center).with_rotation(rotation),
-            Damping { angular_damping: def.angular_damping, linear_damping: def.linear_damping },
+            Damping {
+                angular_damping: def.angular_damping,
+                linear_damping: def.linear_damping,
+            },
         ));
 
         if let Some((parent_entity, parent_center, parent_rotation)) = prev {
@@ -224,33 +264,43 @@ pub fn spawn_chain(commands: &mut Commands, def: ChainDef) {
                 // el punto de conexión es el midpoint entre las puntas reales de las cápsulas
                 // (no entre centros) — para curvas donde los eslabones tienen distinta orientación,
                 // usar centros pone el anchor dentro de ambos cuerpos causando traslape visual
-                let parent_tip  = parent_center + parent_rotation * Vec3::new(0.0,  link_half, 0.0);
-                let child_tail  = center        + rotation        * Vec3::new(0.0, -link_half, 0.0);
-                let connection  = (parent_tip + child_tail) / 2.0;
-                (parent_rotation.inverse() * (connection - parent_center),
-                 rotation.inverse() * (connection - center))
+                let parent_tip = parent_center + parent_rotation * Vec3::new(0.0, link_half, 0.0);
+                let child_tail = center + rotation * Vec3::new(0.0, -link_half, 0.0);
+                let connection = (parent_tip + child_tail) / 2.0;
+                (
+                    parent_rotation.inverse() * (connection - parent_center),
+                    rotation.inverse() * (connection - center),
+                )
             };
 
             entity.insert(match &def.path {
-                ChainPath::Linear { .. } => ImpulseJoint::new(parent_entity,
+                ChainPath::Linear { .. } => ImpulseJoint::new(
+                    parent_entity,
                     RevoluteJointBuilder::new(hinge_axis)
                         .local_anchor1(parent_local)
                         .local_anchor2(child_local)
-                        .build()),
+                        .build(),
+                ),
                 ChainPath::Curve { .. } => {
                     // eje de bisagra calculado por eslabón desde la tangente local —
                     // previene el giro libre sobre el eje del eslabón (bug con SphericalJoint)
                     let world_axis = {
                         let perp = tangent.cross(Vec3::Y);
-                        if perp.length_squared() > 0.001 { perp.normalize() } else { Vec3::Z }
+                        if perp.length_squared() > 0.001 {
+                            perp.normalize()
+                        } else {
+                            Vec3::Z
+                        }
                     };
                     let local_axis = parent_rotation.inverse() * world_axis;
-                    ImpulseJoint::new(parent_entity,
+                    ImpulseJoint::new(
+                        parent_entity,
                         RevoluteJointBuilder::new(local_axis)
                             .local_anchor1(parent_local)
                             .local_anchor2(child_local)
-                            .build())
-                },
+                            .build(),
+                    )
+                }
             });
         }
 

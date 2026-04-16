@@ -9,7 +9,7 @@ use modes::{Mode, SimMode, parse_mode};
 use plugins::GraphicsPlugin;
 use modes::BenchScene;
 use world_objects::{
-    ChainDef, ChainPath, ColliderShape, ObjectDef, preprocess_assets,
+    BodyType, ChainDef, ChainPath, ColliderShape, ObjectDef, preprocess_assets,
     spawn_chain, spawn_object, spawn_falling_spheres, spawn_stacked_boxes, spawn_chain_grid,
 };
 
@@ -147,68 +147,43 @@ fn update_perf_overlay(
 fn setup_world(mut commands: Commands, mode: Res<SimMode>) {
     let start = std::time::Instant::now();
 
-    let angular_damping = 0.6_f32;
-    let linear_damping = 0.6_f32;
-
+    // suelo
     spawn_object(
         &mut commands,
         ObjectDef {
-            shape: ColliderShape::Box {
-                hx: 100.0,
-                hy: 0.1,
-                hz: 100.0,
-            },
-            position: Vec3::new(0.0, -3.0, 0.0),
+            shape: ColliderShape::Box { hx: 100.0, hy: 0.1, hz: 100.0 },
+            position: Vec3::new(0.0, 0.0, 0.0),
             ..Default::default()
         },
         &mode,
     );
 
+    // carro — arranca a la izquierda y avanza hacia +X
+    spawn_object(
+        &mut commands,
+        ObjectDef {
+            shape: ColliderShape::MeshObject { model_name: "vehicle-racer" },
+            position: Vec3::new(-6.0, 0.6, 0.0),
+            body: BodyType::Dynamic,
+            velocity: Some(Vec3::new(4.0, 0.0, 0.0)),
+            ..Default::default()
+        },
+        &mode,
+    );
+
+    // cadena vertical en el camino del carro
     spawn_chain(
         &mut commands,
         ChainDef {
             path: ChainPath::Linear {
-                start: Vec3::new(-4.0, 4.5, 0.0),
+                start: Vec3::new(2.0, 5.5, 0.0),
                 direction: Vec3::NEG_Y,
-                length: 4.0,
+                length: 5.0,
             },
             radius: 0.08,
             anchored: true,
-            angular_damping,
-            linear_damping,
-        },
-    );
-
-    spawn_chain(
-        &mut commands,
-        ChainDef {
-            path: ChainPath::Linear {
-                start: Vec3::new(-1.5, 4.5, 0.0),
-                direction: Vec3::X,
-                length: 3.0,
-            },
-            radius: 0.08,
-            anchored: true,
-            angular_damping,
-            linear_damping,
-        },
-    );
-
-    // arco 90° en plano XY, r=3.0 — arco: (π/2)·3 ≈ 4.71m
-    spawn_chain(
-        &mut commands,
-        ChainDef {
-            path: ChainPath::Curve {
-                sample: Box::new(|t| {
-                    let angle = std::f32::consts::FRAC_PI_2 * (1.0 - t);
-                    Vec3::new(3.5 + angle.cos() * 3.0, 1.5 + angle.sin() * 3.0, 0.0)
-                }),
-                length: std::f32::consts::FRAC_PI_2 * 3.0,
-            },
-            radius: 0.08,
-            anchored: true,
-            angular_damping,
-            linear_damping,
+            angular_damping: 0.4,
+            linear_damping: 0.4,
         },
     );
 
