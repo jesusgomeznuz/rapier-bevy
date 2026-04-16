@@ -14,8 +14,8 @@ pub fn build_collider(shape: ColliderShape, mode: &SimMode) -> Collider {
         ColliderShape::Sphere { radius }               => Collider::ball(radius),
         ColliderShape::Capsule { half_height, radius } => Collider::capsule_y(half_height, radius),
         ColliderShape::MeshObject { model_name }       => match mode {
-            SimMode::Precomputed => load_compound(model_name),
-            SimMode::Raw         => decompose_obj(&format!("assets/{}.obj", model_name)),
+            SimMode::Precomputed       => load_compound(model_name),
+            SimMode::Raw | SimMode::Bench { .. } => decompose_obj(&format!("assets/{}.obj", model_name)),
         },
     }
 }
