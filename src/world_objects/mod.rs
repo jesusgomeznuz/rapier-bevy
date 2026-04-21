@@ -138,9 +138,90 @@ pub fn spawn_chain_grid(commands: &mut Commands, count: u32) {
     }
 }
 
+pub struct VehicleDef {
+    pub position: Vec3,
+}
+
+pub fn spawn_vehicle(commands: &mut Commands, def: VehicleDef, mode: &SimMode) {
+    use bevy_rapier3d::geometry::Group;
+    let rotation = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+
+    // vehicle group: chassis y ruedas no se colisionan entre sí
+    let vehicle_group = Group::GROUP_2;
+    let vehicle_collision = CollisionGroups::new(vehicle_group, Group::ALL ^ vehicle_group);
+
+    // (offset en local chassis, motor trasero?)
+    let wheels = [
+        (Vec3::new(-0.193, 0.122,  0.250), true),  // trasera izquierda
+        (Vec3::new( 0.193, 0.122,  0.250), true),  // trasera derecha
+        (Vec3::new(-0.193, 0.122, -0.250), false), // delantera izquierda
+        (Vec3::new( 0.193, 0.122, -0.250), false), // delantera derecha
+    ];
+
+    let chassis = commands.spawn((
+        colliders::build_collider(ColliderShape::MeshObject { model_name: "vehicle-racer-chassis" }, mode),
+        RigidBody::Dynamic,
+        Transform::from_translation(def.position).with_rotation(rotation),
+        Friction::coefficient(0.3),
+        Restitution::coefficient(0.0),
+        Damping { angular_damping: 2.0, linear_damping: 0.0 },
+        vehicle_collision,
+    )).id();
+
+    // cilindro perfecto orientado en X local (eje del axle) dentro del compound —
+    // el body mantiene la misma rotación que el chassis para no romper los joints
+    let wheel_collider = Collider::compound(vec![(
+        Vec3::ZERO,
+        Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2),
+        Collider::cylinder(0.078, 0.156),
+    )]);
+    let wheel_rotation = rotation;
+
+    for (offset, is_rear) in wheels {
+        let wheel_pos = def.position + rotation * offset;
+        let joint = {
+            let b = RevoluteJointBuilder::new(Vec3::X)
+                .local_anchor1(offset)
+                .local_anchor2(Vec3::ZERO);
+            if is_rear {
+                b.motor_velocity(-25.0, 50.0).build()
+            } else {
+                b.build()
+            }
+        };
+        commands.spawn((
+            wheel_collider.clone(),
+            RigidBody::Dynamic,
+            Transform::from_translation(wheel_pos).with_rotation(wheel_rotation),
+            Friction::coefficient(0.8),
+            Restitution::coefficient(0.0),
+            vehicle_collision,
+            ImpulseJoint::new(chassis, joint),
+        ));
+    }
+}
+
 pub fn preprocess_assets() {
+    use bevy_rapier3d::prelude::VHACDParameters;
     let start = std::time::Instant::now();
-    colliders::preprocess_obj("assets/vehicle-racer.obj", "assets/vehicle-racer.compound");
+    colliders::preprocess_obj(
+        "assets/vehicle-racer.obj",
+        "assets/vehicle-racer-chassis.compound",
+        Some("vehicle-racer"),
+        VHACDParameters {
+            resolution: 64,
+            ..Default::default()
+        },
+    );
+    colliders::preprocess_obj(
+        "assets/wheel-medium.obj",
+        "assets/wheel-medium.compound",
+        None,
+        VHACDParameters {
+            resolution: 64,
+            ..Default::default()
+        },
+    );
     println!("[preprocess] total: {:.2?}", start.elapsed());
 }
 
@@ -175,7 +256,10 @@ pub fn spawn_object(commands: &mut Commands, def: ObjectDef, mode: &SimMode) {
         });
     }
     if let Some(v) = def.velocity {
-        entity.insert(Velocity { linvel: v, angvel: Vec3::ZERO });
+        entity.insert(Velocity {
+            linvel: v,
+            angvel: Vec3::ZERO,
+        });
     }
     if let (Some(joint_def), Some(anchor_entity)) = (def.joint, anchor) {
         match joint_def {

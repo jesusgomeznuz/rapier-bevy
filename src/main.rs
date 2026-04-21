@@ -9,8 +9,8 @@ use modes::{Mode, SimMode, parse_mode};
 use plugins::GraphicsPlugin;
 use modes::BenchScene;
 use world_objects::{
-    BodyType, ChainDef, ChainPath, ColliderShape, ObjectDef, preprocess_assets,
-    spawn_chain, spawn_object, spawn_falling_spheres, spawn_stacked_boxes, spawn_chain_grid,
+    BodyType, ChainDef, ChainPath, ColliderShape, ObjectDef, VehicleDef, preprocess_assets,
+    spawn_chain, spawn_object, spawn_vehicle, spawn_falling_spheres, spawn_stacked_boxes, spawn_chain_grid,
 };
 
 fn main() {
@@ -158,15 +158,11 @@ fn setup_world(mut commands: Commands, mode: Res<SimMode>) {
         &mode,
     );
 
-    // carro — arranca a la izquierda y avanza hacia +X
-    spawn_object(
+    // carro con ruedas traseras motorizadas
+    spawn_vehicle(
         &mut commands,
-        ObjectDef {
-            shape: ColliderShape::MeshObject { model_name: "vehicle-racer" },
-            position: Vec3::new(-6.0, 0.6, 0.0),
-            body: BodyType::Dynamic,
-            velocity: Some(Vec3::new(4.0, 0.0, 0.0)),
-            ..Default::default()
+        VehicleDef {
+            position: Vec3::new(-6.0, 0.2, 0.0),
         },
         &mode,
     );

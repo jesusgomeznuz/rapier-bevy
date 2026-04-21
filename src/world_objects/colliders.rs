@@ -15,17 +15,20 @@ pub fn build_collider(shape: ColliderShape, mode: &SimMode) -> Collider {
         ColliderShape::Capsule { half_height, radius } => Collider::capsule_y(half_height, radius),
         ColliderShape::MeshObject { model_name }       => match mode {
             SimMode::Precomputed       => load_compound(model_name),
-            SimMode::Raw | SimMode::Bench { .. } => decompose_obj(&format!("assets/{}.obj", model_name)),
+            SimMode::Raw | SimMode::Bench { .. } => {
+                let (obj_name, group) = obj_source(model_name);
+                decompose_obj(&format!("assets/{}.obj", obj_name), group)
+            }
         },
     }
 }
 
-pub fn preprocess_obj(obj_path: &str, output_path: &str) {
-    println!("Preprocessing {}...", obj_path);
+pub fn preprocess_obj(obj_path: &str, output_path: &str, group: Option<&str>, params: VHACDParameters) {
+    println!("Preprocessing {} (group={:?})...", obj_path, group);
     let start = std::time::Instant::now();
 
-    let (vertices, indices) = load_obj(obj_path);
-    let shape = SharedShape::convex_decomposition_with_params(&vertices, &indices, &vhacd_params());
+    let (vertices, indices) = load_obj(obj_path, group);
+    let shape = SharedShape::convex_decomposition_with_params(&vertices, &indices, &params);
 
     let parts: Vec<Vec<[f32; 3]>> = shape
         .as_compound()
@@ -43,7 +46,7 @@ pub fn preprocess_obj(obj_path: &str, output_path: &str) {
     println!("  -> {} convex pieces in {:.2?}", parts.len(), start.elapsed());
 }
 
-fn load_obj(path: &str) -> (Vec<Point<f32>>, Vec<[u32; 3]>) {
+fn load_obj(path: &str, group: Option<&str>) -> (Vec<Point<f32>>, Vec<[u32; 3]>) {
     let (models, _) = tobj::load_obj(path, &tobj::LoadOptions {
         triangulate: true,
         single_index: true,
@@ -51,27 +54,50 @@ fn load_obj(path: &str) -> (Vec<Point<f32>>, Vec<[u32; 3]>) {
     })
     .unwrap_or_else(|_| panic!("Failed to load obj: {}", path));
 
-    let mesh = &models[0].mesh;
-    let vertices = mesh.positions.chunks_exact(3)
-        .map(|xyz| Point::from([xyz[0], xyz[1], xyz[2]]))
-        .collect();
-    let indices = mesh.indices.chunks_exact(3)
-        .map(|tri| [tri[0], tri[1], tri[2]])
-        .collect();
+    let selected: Vec<_> = match group {
+        Some(name) => models.iter().filter(|m| m.name == name).collect(),
+        None       => models.iter().collect(),
+    };
+
+    let mut vertices = vec![];
+    let mut indices  = vec![];
+    let mut offset   = 0u32;
+
+    for model in selected {
+        let mesh = &model.mesh;
+        let n = (mesh.positions.len() / 3) as u32;
+        vertices.extend(mesh.positions.chunks_exact(3)
+            .map(|xyz| Point::from([xyz[0], xyz[1], xyz[2]])));
+        indices.extend(mesh.indices.chunks_exact(3)
+            .map(|tri| [tri[0] + offset, tri[1] + offset, tri[2] + offset]));
+        offset += n;
+    }
 
     (vertices, indices)
 }
 
-fn vhacd_params() -> VHACDParameters {
-    VHACDParameters { resolution: 128, ..Default::default() }
+fn chassis_params() -> VHACDParameters {
+    VHACDParameters { resolution: 64, max_convex_hulls: 4, ..Default::default() }
 }
 
-fn decompose_obj(obj_path: &str) -> Collider {
-    let (vertices, indices) = load_obj(obj_path);
+fn wheel_params() -> VHACDParameters {
+    VHACDParameters { resolution: 256, max_convex_hulls: 3, concavity: 0.0001, ..Default::default() }
+}
+
+// Mapea el nombre del asset al OBJ fuente y al grupo a filtrar
+fn obj_source(model_name: &str) -> (&str, Option<&str>) {
+    match model_name {
+        "vehicle-racer-chassis" => ("vehicle-racer", Some("vehicle-racer")),
+        other => (other, None),
+    }
+}
+
+fn decompose_obj(obj_path: &str, group: Option<&str>) -> Collider {
+    let (vertices, indices) = load_obj(obj_path, group);
     Collider::from(SharedShape::convex_decomposition_with_params(
         &vertices,
         &indices,
-        &vhacd_params(),
+        &chassis_params(),
     ))
 }
 
