@@ -1,3 +1,4 @@
+use bevy::prelude::{Quat, Vec3};
 use bevy_rapier3d::{
     parry::{
         math::{Isometry, Point},
@@ -13,7 +14,12 @@ pub fn build_collider(shape: ColliderShape, mode: &SimMode) -> Collider {
         ColliderShape::Box { hx, hy, hz }             => Collider::cuboid(hx, hy, hz),
         ColliderShape::Sphere { radius }               => Collider::ball(radius),
         ColliderShape::Capsule { half_height, radius } => Collider::capsule_y(half_height, radius),
-        ColliderShape::MeshObject { model_name }       => match mode {
+        ColliderShape::Cylinder { half_height, radius, axis } => Collider::compound(vec![(
+            Vec3::ZERO,
+            Quat::from_rotation_arc(Vec3::Y, axis),
+            Collider::cylinder(half_height, radius),
+        )]),
+        ColliderShape::MeshObject { model_name, .. }    => match mode {
             SimMode::Precomputed       => load_compound(model_name),
             SimMode::Raw | SimMode::Bench { .. } => {
                 let (obj_name, group) = obj_source(model_name);

@@ -39,6 +39,10 @@ impl SimMode {
     }
 }
 
+pub fn debug_enabled() -> bool {
+    std::env::args().any(|a| a == "--debug")
+}
+
 pub fn parse_mode() -> Mode {
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--preprocess".to_string()) {
