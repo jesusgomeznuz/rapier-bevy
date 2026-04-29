@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 
 #[allow(dead_code)]
+#[derive(Clone)]
 pub enum ColliderShape {
     Box { hx: f32, hy: f32, hz: f32 },
     Sphere { radius: f32 },
@@ -27,6 +28,7 @@ pub enum ColliderShape {
 pub enum BodyType {
     Static,
     Dynamic,
+    Kinematic,
 }
 
 pub struct MotorDef {
@@ -100,10 +102,13 @@ pub struct ObjectDef {
     pub friction: Option<f32>,
     pub restitution: Option<f32>,
     pub angular_damping: Option<f32>,
+    pub linear_damping: Option<f32>,
+    pub locked_axes: Option<LockedAxes>,
     pub collision_groups: Option<CollisionGroups>,
     pub joint: Option<JointDef>,
     pub velocity: Option<Vec3>,
     pub visual: Option<VisualDef>,
+    pub ccd: bool,
 }
 
 impl Default for ObjectDef {
@@ -116,10 +121,13 @@ impl Default for ObjectDef {
             friction: None,
             restitution: None,
             angular_damping: None,
+            linear_damping: None,
+            locked_axes: None,
             collision_groups: None,
             joint: None,
             velocity: None,
             visual: None,
+            ccd: false,
         }
     }
 }
@@ -176,8 +184,10 @@ pub fn spawn_object(
         Transform::from_translation(def.position).with_rotation(def.rotation),
     ));
 
-    if let BodyType::Dynamic = def.body {
-        entity.insert(RigidBody::Dynamic);
+    match def.body {
+        BodyType::Dynamic   => { entity.insert((RigidBody::Dynamic, Velocity::default())); }
+        BodyType::Kinematic => { entity.insert(RigidBody::KinematicVelocityBased); }
+        BodyType::Static    => {}
     }
     if let Some(f) = def.friction {
         entity.insert(Friction::coefficient(f));
@@ -185,8 +195,17 @@ pub fn spawn_object(
     if let Some(r) = def.restitution {
         entity.insert(Restitution::coefficient(r));
     }
-    if let Some(d) = def.angular_damping {
-        entity.insert(Damping { angular_damping: d, linear_damping: 0.0 });
+    if def.angular_damping.is_some() || def.linear_damping.is_some() {
+        entity.insert(Damping {
+            angular_damping: def.angular_damping.unwrap_or(0.0),
+            linear_damping:  def.linear_damping.unwrap_or(0.0),
+        });
+    }
+    if let Some(axes) = def.locked_axes {
+        entity.insert(axes);
+    }
+    if def.ccd {
+        entity.insert(Ccd::enabled());
     }
     if let Some(v) = def.velocity {
         entity.insert(Velocity { linvel: v, angvel: Vec3::ZERO });

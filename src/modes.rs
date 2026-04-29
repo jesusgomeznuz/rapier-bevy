@@ -43,6 +43,13 @@ pub fn debug_enabled() -> bool {
     std::env::args().any(|a| a == "--debug")
 }
 
+pub fn record_duration() -> Option<u32> {
+    let args: Vec<String> = std::env::args().collect();
+    let pos  = args.iter().position(|a| a == "--record")?;
+    let secs = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(60u32);
+    Some(secs)
+}
+
 pub fn parse_mode() -> Mode {
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--preprocess".to_string()) {

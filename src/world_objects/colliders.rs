@@ -49,6 +49,10 @@ pub fn preprocess_obj(obj_path: &str, output_path: &str, group: Option<&str>, pa
     std::fs::write(output_path, &data)
         .unwrap_or_else(|_| panic!("Failed to write {}", output_path));
 
+    let json_path = output_path.replace(".compound", ".compound.json");
+    std::fs::write(&json_path, parts_to_json(&parts))
+        .unwrap_or_else(|_| panic!("Failed to write {}", json_path));
+
     println!("  -> {} convex pieces in {:.2?}", parts.len(), start.elapsed());
 }
 
@@ -105,6 +109,16 @@ fn decompose_obj(obj_path: &str, group: Option<&str>) -> Collider {
         &indices,
         &chassis_params(),
     ))
+}
+
+fn parts_to_json(parts: &Vec<Vec<[f32; 3]>>) -> String {
+    let hulls: Vec<String> = parts.iter().map(|hull| {
+        let pts: Vec<String> = hull.iter()
+            .map(|p| format!("[{},{},{}]", p[0], p[1], p[2]))
+            .collect();
+        format!("[{}]", pts.join(","))
+    }).collect();
+    format!("[{}]", hulls.join(","))
 }
 
 fn load_compound(model_name: &str) -> Collider {

@@ -3,8 +3,17 @@ name = "rapier-bevy"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "rapier_bevy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rapier-bevy"
+path = "src/main.rs"
+
 [dependencies]
 bevy = "0.16.1"
 bevy_rapier3d = { version = "0.31.0", features = ["simd-stable", "debug-render-3d"] }
 bincode = "1"
 tobj = "4.0.3"
+crossbeam-channel = "0.5"
