@@ -19,23 +19,31 @@ fn spawn_camera_and_lights(
     mut commands: Commands,
     offscreen: Option<Res<OffscreenTarget>>,
 ) {
-    let camera_target = offscreen.map(|o| Camera {
-        target: RenderTarget::Image(o.image.clone().into()),
-        ..default()
-    });
+    let render_target: Option<RenderTarget> = offscreen
+        .as_ref()
+        .map(|o| RenderTarget::Image(o.image.clone().into()));
 
-    if let Some(camera) = camera_target {
-        commands.spawn((
-            Camera3d::default(),
-            camera,
-            Transform::from_xyz(0.0, 13.0, 22.0).looking_at(Vec3::new(0.0, 12.0, 0.0), Vec3::Y),
-        ));
-    } else {
-        commands.spawn((
-            Camera3d::default(),
-            Transform::from_xyz(0.0, 13.0, 22.0).looking_at(Vec3::new(0.0, 12.0, 0.0), Vec3::Y),
-        ));
+    let mut cam3d = Camera::default();
+    if let Some(ref t) = render_target {
+        cam3d.target = t.clone();
     }
+    commands.spawn((
+        Camera3d::default(),
+        cam3d,
+        Transform::from_xyz(0.0, 13.0, 22.0).looking_at(Vec3::new(0.0, 12.0, 0.0), Vec3::Y),
+    ));
+
+    // Camera2d renderiza Text2d (nicknames) encima de la escena 3D.
+    // clear_color::None evita que borre el frame 3D ya renderizado.
+    let mut cam2d = Camera {
+        order: 1,
+        clear_color: ClearColorConfig::None,
+        ..default()
+    };
+    if let Some(ref t) = render_target {
+        cam2d.target = t.clone();
+    }
+    commands.spawn((Camera2d, cam2d));
 
     commands.insert_resource(AmbientLight {
         color:      Color::WHITE,
