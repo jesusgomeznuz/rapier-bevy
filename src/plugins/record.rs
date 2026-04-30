@@ -23,10 +23,9 @@ use std::{
     time::Duration,
 };
 
-const WIDTH:    u32 = 1280;
-const HEIGHT:   u32 = 720;
+const WIDTH:    u32 = 1080;
+const HEIGHT:   u32 = 1920;
 const FPS:      u32 = 60;
-const PRE_ROLL: u32 = 30;  // frames to skip while GPU pipelines warm up
 const SPEED:    f32 = 50.0; // virtual time multiplier — sweet spot on M4
 
 /// Inserted by RecordPlugin before GraphicsPlugin runs,
@@ -36,11 +35,16 @@ pub struct OffscreenTarget {
     pub image: Handle<Image>,
 }
 
+/// Handles de assets que deben estar cargados antes de empezar a grabar.
+/// Poblar desde el juego con los handles de imágenes cargadas.
+#[derive(Resource, Default)]
+pub struct AssetsLoading(pub Vec<UntypedHandle>);
+
 #[derive(Resource)]
 struct RecordState {
-    pre_roll:        u32,
     frames_captured: u32,
     total_frames:    u32,
+    frames_to_skip:  u32,
     capture_pending: bool,
     finalized:       bool,
     output_path:     PathBuf,
@@ -73,7 +77,7 @@ impl Plugin for RecordPlugin {
             row_bytes + (align - row_bytes % align) % align
         };
 
-        let pix_fmt     = if cfg!(target_os = "macos") { "bgra" } else { "rgba" };
+        let pix_fmt     = "rgba"; // offscreen Image usa TextureFormat::bevy_default() = RGBA en todas las plataformas
         let video_codec = if cfg!(target_os = "macos") { "h264_videotoolbox" } else { "libx264" };
 
         let mut ffmpeg = Command::new("ffmpeg")
@@ -115,10 +119,11 @@ impl Plugin for RecordPlugin {
         app
             .insert_resource(Time::<Fixed>::from_hz(FPS as f64))
             .insert_resource(MainWorldReceiver(receiver))
+            .insert_resource(AssetsLoading::default())
             .insert_resource(RecordState {
-                pre_roll: PRE_ROLL,
                 frames_captured: 0,
                 total_frames,
+                frames_to_skip:  3,
                 capture_pending: false,
                 finalized: false,
                 output_path,
@@ -166,9 +171,13 @@ fn create_offscreen_target(
     commands.spawn(ImageCopier::new(handle, size, &render_device));
 }
 
-fn mark_capture(mut state: ResMut<RecordState>) {
-    if state.pre_roll > 0 {
-        state.pre_roll -= 1;
+fn mark_capture(
+    mut state: ResMut<RecordState>,
+    loading: Res<AssetsLoading>,
+    asset_server: Res<AssetServer>,
+) {
+    let all_ready = loading.0.iter().all(|h| asset_server.is_loaded_with_dependencies(h));
+    if !all_ready {
         return;
     }
     if state.frames_captured < state.total_frames {
@@ -193,6 +202,12 @@ fn receive_and_pipe(receiver: Res<MainWorldReceiver>, mut state: ResMut<RecordSt
     }
 
     let Some(raw) = last else { return };
+
+    if state.frames_to_skip > 0 {
+        state.frames_to_skip -= 1;
+        state.capture_pending = false;
+        return;
+    }
 
     // Strip wgpu row padding before piping
     let row_bytes    = state.row_bytes;

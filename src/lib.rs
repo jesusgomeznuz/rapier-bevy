@@ -4,6 +4,7 @@ pub mod world_objects;
 
 pub use modes::SimMode;
 pub use plugins::{GraphicsPlugin, PhysicsStatsPlugin, RecordPlugin};
+pub use plugins::record::AssetsLoading;
 pub use bevy_rapier3d::prelude::LockedAxes;
 pub use world_objects::{
     BodyType, ChainDef, ChainPath, ColliderShape, JointDef, MotorDef, ObjectDef, VehicleDef,
