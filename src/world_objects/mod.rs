@@ -12,6 +12,7 @@ pub use vehicle::{VehicleDef, spawn_vehicle};
 use crate::modes::SimMode;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
+use bevy_mod_rounded_box::RoundedBox;
 use bevy_rapier3d::prelude::*;
 
 #[allow(dead_code)]
@@ -62,11 +63,12 @@ pub struct VisualDef {
     pub appearance: VisualAppearance,
     pub metallic: f32,
     pub roughness: f32,
+    pub border_radius: Option<f32>,
 }
 
 impl Default for VisualDef {
     fn default() -> Self {
-        Self { appearance: VisualAppearance::default(), metallic: 0.0, roughness: 0.8 }
+        Self { appearance: VisualAppearance::default(), metallic: 0.0, roughness: 0.8, border_radius: None }
     }
 }
 
@@ -78,10 +80,10 @@ impl VisualDef {
         Self { appearance: VisualAppearance::Color(Color::srgb(0.08, 0.08, 0.10)), roughness: 0.50, ..default() }
     }
     pub fn gold() -> Self {
-        Self { appearance: VisualAppearance::Color(Color::srgb(0.90, 0.70, 0.10)), metallic: 0.2, roughness: 0.3 }
+        Self { appearance: VisualAppearance::Color(Color::srgb(0.90, 0.70, 0.10)), metallic: 0.2, roughness: 0.3, ..default() }
     }
     pub fn steel() -> Self {
-        Self { appearance: VisualAppearance::Color(Color::srgb(0.65, 0.65, 0.68)), metallic: 0.95, roughness: 0.25 }
+        Self { appearance: VisualAppearance::Color(Color::srgb(0.65, 0.65, 0.68)), metallic: 0.95, roughness: 0.25, ..default() }
     }
     pub fn grass_green() -> Self {
         Self { appearance: VisualAppearance::Color(Color::srgb(0.22, 0.38, 0.22)), roughness: 0.90, ..default() }
@@ -173,7 +175,7 @@ pub fn spawn_object(
             let mesh_handle = match &def.shape {
                 ColliderShape::MeshObject { glb, .. } =>
                     Some(asset_server.load::<Mesh>(format!("{glb}#Mesh0/Primitive0"))),
-                shape => build_mesh_for_shape(shape).map(|mesh| meshes.add(mesh)),
+                shape => build_mesh_for_shape(shape, vis.border_radius).map(|mesh| meshes.add(mesh)),
             }?;
             Some((mesh_handle, materials.add(m)))
         })
@@ -244,9 +246,15 @@ pub fn spawn_object(
     entity.id()
 }
 
-fn build_mesh_for_shape(shape: &ColliderShape) -> Option<Mesh> {
+fn build_mesh_for_shape(shape: &ColliderShape, border_radius: Option<f32>) -> Option<Mesh> {
     match shape {
-        ColliderShape::Box { hx, hy, hz }              => Some(Cuboid::new(hx * 2.0, hy * 2.0, hz * 2.0).into()),
+        ColliderShape::Box { hx, hy, hz } => {
+            if let Some(radius) = border_radius {
+                Some(RoundedBox { size: Vec3::new(hx * 2.0, hy * 2.0, hz * 2.0), radius, ..default() }.into())
+            } else {
+                Some(Cuboid::new(hx * 2.0, hy * 2.0, hz * 2.0).into())
+            }
+        }
         ColliderShape::Sphere { radius }                => Some(Sphere::new(*radius).into()),
         ColliderShape::Capsule { half_height, radius }  => Some(Capsule3d::new(*radius, half_height * 2.0).into()),
         ColliderShape::Cylinder { half_height, radius, .. } => Some(Cylinder::new(*radius, half_height * 2.0).into()),

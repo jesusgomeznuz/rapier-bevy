@@ -17,3 +17,4 @@ bevy_rapier3d = { version = "0.31.0", features = ["simd-stable", "debug-render-3
 bincode = "1"
 tobj = "4.0.3"
 crossbeam-channel = "0.5"
+bevy_mod_rounded_box = "0.10"
