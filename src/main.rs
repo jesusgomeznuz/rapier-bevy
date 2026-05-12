@@ -1,34 +1,79 @@
+mod engine;
 mod modes;
 mod plugins;
 mod world_objects;
 
-use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
-use bevy_rapier3d::prelude::*;
-use modes::{Mode, SimMode, parse_mode};
-use plugins::{GraphicsPlugin, PhysicsStatsPlugin, run_bench_mode};
-use world_objects::{ColliderShape, ObjectDef, VehicleDef, VisualDef, preprocess_assets,
-    spawn_object, spawn_staircase, spawn_vehicle};
+use engine::{GameAppConfig, game_app};
+use modes::{BenchScene, SimMode};
+use plugins::run_bench_mode;
+use world_objects::{
+    ColliderShape, ObjectDef, VehicleDef, VisualDef, preprocess_assets, spawn_object,
+    spawn_staircase, spawn_vehicle,
+};
+
+enum DemoCommand {
+    Preprocess,
+    Sim(SimMode),
+    Bench { scene: BenchScene, count: u32 },
+}
+
+fn parse_demo_command() -> DemoCommand {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--preprocess") {
+        return DemoCommand::Preprocess;
+    }
+    if let Some(pos) = args.iter().position(|a| a == "--bench") {
+        let scene_str = args.get(pos + 1).map(String::as_str).unwrap_or("falling-spheres");
+        let count = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(100u32);
+        let scene = match scene_str {
+            "stacked-boxes" => BenchScene::StackedBoxes,
+            "chain-grid"    => BenchScene::ChainGrid,
+            _               => BenchScene::FallingSpheres,
+        };
+        return DemoCommand::Bench { scene, count };
+    }
+    if args.iter().any(|a| a == "--sim-raw") {
+        return DemoCommand::Sim(SimMode::Raw);
+    }
+    DemoCommand::Sim(SimMode::Precomputed)
+}
 
 fn main() {
-    match parse_mode() {
-        Mode::Preprocess => preprocess_assets(),
-        Mode::Sim(mode @ SimMode::Bench { .. }) => run_bench_mode(mode),
-        Mode::Sim(mode) => run_world_mode(mode),
+    match parse_demo_command() {
+        DemoCommand::Preprocess         => preprocess_assets(),
+        DemoCommand::Sim(mode)          => run_demo_sim(mode),
+        DemoCommand::Bench { scene, count } => run_bench_mode(SimMode::Bench { scene, count }),
     }
 }
 
-fn run_world_mode(mode: SimMode) {
-    App::new()
-        .add_plugins(DefaultPlugins)
-        .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
-        .add_plugins(GraphicsPlugin)
-        .add_plugins(PhysicsStatsPlugin)
-        .add_systems(Startup, setup_world)
-        .insert_resource(mode)
+fn run_demo_sim(mode: SimMode) {
+    game_app(mode, GameAppConfig::default())
+        .add_systems(Startup, (spawn_demo_camera, setup_world))
         .run();
+}
+
+fn spawn_demo_camera(mut commands: Commands) {
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(0.0, 13.0, 22.0).looking_at(Vec3::new(0.0, 12.0, 0.0), Vec3::Y),
+    ));
+
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 8_000.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.5, -0.3, 0.0)),
+    ));
+
+    commands.insert_resource(AmbientLight {
+        color: Color::WHITE,
+        brightness: 120.0,
+        ..default()
+    });
 }
 
 fn setup_world(

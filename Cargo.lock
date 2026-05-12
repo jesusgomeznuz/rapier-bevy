@@ -865,6 +865,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_mod_rounded_box"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4fe658b86daf887fa3f0121e9ece1fc7a9a534fc77c756109dcc92a9281d5f1"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
 name = "bevy_pbr"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3682,6 +3691,7 @@ name = "rapier-bevy"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_mod_rounded_box",
  "bevy_rapier3d",
  "bincode",
  "crossbeam-channel",

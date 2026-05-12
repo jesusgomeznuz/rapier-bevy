@@ -1,4 +1,6 @@
-use bevy::prelude::{Quat, Vec3};
+use bevy::asset::RenderAssetUsages;
+use bevy::prelude::{Mesh, Quat, Vec3};
+use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy_rapier3d::{
     parry::{
         math::{Isometry, Point},
@@ -19,14 +21,48 @@ pub fn build_collider(shape: ColliderShape, mode: &SimMode) -> Collider {
             Quat::from_rotation_arc(Vec3::Y, axis),
             Collider::cylinder(half_height, radius),
         )]),
-        ColliderShape::MeshObject { model_name, .. }    => match mode {
-            SimMode::Precomputed       => load_compound(model_name),
+        ColliderShape::MeshObject { model_name }    => match mode {
+            SimMode::Precomputed       => load_compound(&model_name),
             SimMode::Raw | SimMode::Bench { .. } => {
-                let (obj_name, group) = obj_source(model_name);
+                let (obj_name, group) = obj_source(&model_name);
                 decompose_obj(&format!("assets/{}.obj", obj_name), group)
             }
         },
     }
+}
+
+pub fn build_mesh_from_obj(model_name: &str) -> Mesh {
+    let (obj_name, group) = obj_source(model_name);
+    let path = format!("assets/{}.obj", obj_name);
+    let (models, _) = tobj::load_obj(&path, &tobj::LoadOptions {
+        triangulate: true,
+        single_index: true,
+        ..Default::default()
+    })
+    .unwrap_or_else(|_| panic!("Failed to load obj: {}", path));
+
+    let selected: Vec<_> = match group {
+        Some(name) => models.iter().filter(|m| m.name == name).collect(),
+        None       => models.iter().collect(),
+    };
+
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut indices:   Vec<u32>      = Vec::new();
+    let mut offset    = 0u32;
+
+    for model in selected {
+        let mesh = &model.mesh;
+        let n = (mesh.positions.len() / 3) as u32;
+        positions.extend(mesh.positions.chunks_exact(3).map(|p| [p[0], p[1], p[2]]));
+        indices.extend(mesh.indices.iter().map(|i| i + offset));
+        offset += n;
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh.compute_normals();
+    mesh
 }
 
 pub fn preprocess_obj(obj_path: &str, output_path: &str, group: Option<&str>, params: VHACDParameters) {

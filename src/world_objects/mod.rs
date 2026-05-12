@@ -5,6 +5,7 @@ mod chain;
 mod bench;
 
 pub use bench::{spawn_chain_grid, spawn_falling_spheres, spawn_stacked_boxes};
+pub use colliders::preprocess_obj;
 pub use chain::{ChainDef, ChainPath, spawn_chain};
 pub use staircase::spawn_staircase;
 pub use vehicle::{VehicleDef, spawn_vehicle};
@@ -22,7 +23,7 @@ pub enum ColliderShape {
     Sphere { radius: f32 },
     Capsule { half_height: f32, radius: f32 },
     Cylinder { half_height: f32, radius: f32, axis: Vec3 },
-    MeshObject { model_name: &'static str, glb: &'static str },
+    MeshObject { model_name: String },
 }
 
 #[allow(dead_code)]
@@ -109,6 +110,7 @@ pub struct ObjectDef {
     pub collision_groups: Option<CollisionGroups>,
     pub joint: Option<JointDef>,
     pub velocity: Option<Vec3>,
+    pub angvel: Option<Vec3>,
     pub visual: Option<VisualDef>,
     pub ccd: bool,
 }
@@ -128,6 +130,7 @@ impl Default for ObjectDef {
             collision_groups: None,
             joint: None,
             velocity: None,
+            angvel: None,
             visual: None,
             ccd: false,
         }
@@ -173,8 +176,8 @@ pub fn spawn_object(
         };
         mat.and_then(|m| {
             let mesh_handle = match &def.shape {
-                ColliderShape::MeshObject { glb, .. } =>
-                    Some(asset_server.load::<Mesh>(format!("{glb}#Mesh0/Primitive0"))),
+                ColliderShape::MeshObject { model_name } =>
+                    Some(meshes.add(colliders::build_mesh_from_obj(model_name))),
                 shape => build_mesh_for_shape(shape, vis.border_radius).map(|mesh| meshes.add(mesh)),
             }?;
             Some((mesh_handle, materials.add(m)))
@@ -209,8 +212,11 @@ pub fn spawn_object(
     if def.ccd {
         entity.insert(Ccd::enabled());
     }
-    if let Some(v) = def.velocity {
-        entity.insert(Velocity { linvel: v, angvel: Vec3::ZERO });
+    if def.velocity.is_some() || def.angvel.is_some() {
+        entity.insert(Velocity {
+            linvel: def.velocity.unwrap_or(Vec3::ZERO),
+            angvel: def.angvel.unwrap_or(Vec3::ZERO),
+        });
     }
     if let Some(groups) = def.collision_groups {
         entity.insert(groups);

@@ -24,7 +24,7 @@ pub enum SimMode {
     Bench { scene: BenchScene, count: u32 },
 }
 
-pub enum Mode {
+pub enum EngineMode {
     Preprocess,
     Sim(SimMode),
 }
@@ -50,13 +50,14 @@ pub fn record_duration() -> Option<u32> {
     Some(secs)
 }
 
-pub fn parse_mode() -> Mode {
-    let args: Vec<String> = std::env::args().collect();
-    if args.contains(&"--preprocess".to_string()) {
-        Mode::Preprocess
-    } else if args.contains(&"--sim-raw".to_string()) {
-        Mode::Sim(SimMode::Raw)
-    } else if let Some(pos) = args.iter().position(|a| a == "--bench") {
+pub fn parse_engine_mode(args: &[String]) -> EngineMode {
+    if args.iter().any(|a| a == "--preprocess") {
+        return EngineMode::Preprocess;
+    }
+    if args.iter().any(|a| a == "--sim-raw") {
+        return EngineMode::Sim(SimMode::Raw);
+    }
+    if let Some(pos) = args.iter().position(|a| a == "--bench") {
         let scene_str = args.get(pos + 1).map(String::as_str).unwrap_or("falling-spheres");
         let count     = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(100u32);
         let scene = match scene_str {
@@ -64,8 +65,7 @@ pub fn parse_mode() -> Mode {
             "chain-grid"    => BenchScene::ChainGrid,
             _               => BenchScene::FallingSpheres,
         };
-        Mode::Sim(SimMode::Bench { scene, count })
-    } else {
-        Mode::Sim(SimMode::Precomputed)
+        return EngineMode::Sim(SimMode::Bench { scene, count });
     }
+    EngineMode::Sim(SimMode::Precomputed)
 }

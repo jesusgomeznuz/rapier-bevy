@@ -58,8 +58,7 @@ fn spawn_chassis(
         commands,
         ObjectDef {
             shape: ColliderShape::MeshObject {
-                model_name: "vehicle-racer-chassis",
-                glb: "vehicle-racer.glb",
+                model_name: "vehicle-racer-chassis".into(),
             },
             position: def.position,
             rotation,
