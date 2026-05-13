@@ -113,6 +113,7 @@ pub struct ObjectDef {
     pub angvel: Option<Vec3>,
     pub visual: Option<VisualDef>,
     pub ccd: bool,
+    pub sensor: bool,
 }
 
 impl Default for ObjectDef {
@@ -133,6 +134,7 @@ impl Default for ObjectDef {
             angvel: None,
             visual: None,
             ccd: false,
+            sensor: false,
         }
     }
 }
@@ -212,6 +214,9 @@ pub fn spawn_object(
     }
     if def.ccd {
         entity.insert(Ccd::enabled());
+    }
+    if def.sensor {
+        entity.insert((Sensor, ActiveEvents::COLLISION_EVENTS));
     }
     if def.velocity.is_some() || def.angvel.is_some() {
         entity.insert(Velocity {
