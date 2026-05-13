@@ -2,7 +2,6 @@ use bevy::{
     prelude::*,
     render::{
         Extract, Render, RenderApp, RenderSet,
-        camera::RenderTarget,
         render_asset::{RenderAssetUsages, RenderAssets},
         render_graph::{self, NodeRunError, RenderGraph, RenderGraphContext, RenderLabel},
         render_resource::{

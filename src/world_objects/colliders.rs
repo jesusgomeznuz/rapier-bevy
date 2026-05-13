@@ -144,10 +144,6 @@ fn chassis_params() -> VHACDParameters {
     VHACDParameters { resolution: 64, max_convex_hulls: 4, ..Default::default() }
 }
 
-fn wheel_params() -> VHACDParameters {
-    VHACDParameters { resolution: 256, max_convex_hulls: 3, concavity: 0.0001, ..Default::default() }
-}
-
 // Mapea el nombre del asset al OBJ fuente y al grupo a filtrar
 fn obj_source(model_name: &str) -> (&str, Option<&str>) {
     match model_name {
