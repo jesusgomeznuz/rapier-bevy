@@ -184,8 +184,9 @@ pub fn spawn_object(
         })
     });
 
+    let collider_border = def.visual.as_ref().and_then(|v| v.border_radius);
     let mut entity = commands.spawn((
-        colliders::build_collider(def.shape, mode),
+        colliders::build_collider(def.shape, collider_border, mode),
         Transform::from_translation(def.position).with_rotation(def.rotation),
     ));
 
@@ -263,9 +264,67 @@ fn build_mesh_for_shape(shape: &ColliderShape, border_radius: Option<f32>) -> Op
         }
         ColliderShape::Sphere { radius }                => Some(Sphere::new(*radius).into()),
         ColliderShape::Capsule { half_height, radius }  => Some(Capsule3d::new(*radius, half_height * 2.0).into()),
-        ColliderShape::Cylinder { half_height, radius, .. } => Some(Cylinder::new(*radius, half_height * 2.0).into()),
+        ColliderShape::Cylinder { half_height, radius, .. } => Some(match border_radius {
+            Some(br) if br > 0.0 => build_round_cylinder_mesh(*half_height, *radius, br),
+            _ => Cylinder::new(*radius, half_height * 2.0).into(),
+        }),
         ColliderShape::MeshObject { .. }                => None,
     }
+}
+
+fn build_round_cylinder_mesh(half_height: f32, radius: f32, border: f32) -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::mesh::{Indices, PrimitiveTopology};
+
+    let n_radial = 48;
+    let n_arc    = 8;
+    let h_inner  = (half_height - border).max(0.0);
+    let r_inner  = (radius - border).max(0.0);
+
+    let mut profile: Vec<(f32, f32)> = Vec::new();
+    profile.push((0.0, half_height));
+    profile.push((r_inner, half_height));
+    for i in 1..n_arc {
+        let theta = std::f32::consts::FRAC_PI_2 * (i as f32) / (n_arc as f32);
+        let (s, c) = theta.sin_cos();
+        profile.push((r_inner + border * s, h_inner + border * c));
+    }
+    profile.push((radius, h_inner));
+    profile.push((radius, -h_inner));
+    for i in 1..n_arc {
+        let theta = std::f32::consts::FRAC_PI_2 * (i as f32) / (n_arc as f32);
+        let (s, c) = theta.sin_cos();
+        profile.push((r_inner + border * c, -h_inner - border * s));
+    }
+    profile.push((r_inner, -half_height));
+    profile.push((0.0, -half_height));
+
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    for &(pr, py) in &profile {
+        for j in 0..n_radial {
+            let phi = std::f32::consts::TAU * (j as f32) / (n_radial as f32);
+            let (s, c) = phi.sin_cos();
+            positions.push([pr * c, py, pr * s]);
+        }
+    }
+
+    let mut indices: Vec<u32> = Vec::new();
+    for i in 0..(profile.len() - 1) as u32 {
+        for j in 0..n_radial as u32 {
+            let jn = (j + 1) % n_radial as u32;
+            let a = i       * n_radial as u32 + j;
+            let b = (i + 1) * n_radial as u32 + j;
+            let c = (i + 1) * n_radial as u32 + jn;
+            let d = i       * n_radial as u32 + jn;
+            indices.extend_from_slice(&[a, b, c, a, c, d]);
+        }
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh.compute_normals();
+    mesh
 }
 
 pub fn preprocess_assets() {

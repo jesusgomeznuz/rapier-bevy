@@ -11,16 +11,34 @@ use bevy_rapier3d::{
 use crate::modes::SimMode;
 use super::ColliderShape;
 
-pub fn build_collider(shape: ColliderShape, mode: &SimMode) -> Collider {
+pub fn build_collider(shape: ColliderShape, border_radius: Option<f32>, mode: &SimMode) -> Collider {
     match shape {
-        ColliderShape::Box { hx, hy, hz }             => Collider::cuboid(hx, hy, hz),
+        ColliderShape::Box { hx, hy, hz } => match border_radius {
+            Some(br) if br > 0.0 => Collider::round_cuboid(
+                (hx - br).max(0.001),
+                (hy - br).max(0.001),
+                (hz - br).max(0.001),
+                br,
+            ),
+            _ => Collider::cuboid(hx, hy, hz),
+        },
         ColliderShape::Sphere { radius }               => Collider::ball(radius),
         ColliderShape::Capsule { half_height, radius } => Collider::capsule_y(half_height, radius),
-        ColliderShape::Cylinder { half_height, radius, axis } => Collider::compound(vec![(
-            Vec3::ZERO,
-            Quat::from_rotation_arc(Vec3::Y, axis),
-            Collider::cylinder(half_height, radius),
-        )]),
+        ColliderShape::Cylinder { half_height, radius, axis } => {
+            let inner = match border_radius {
+                Some(br) if br > 0.0 => Collider::round_cylinder(
+                    (half_height - br).max(0.001),
+                    (radius - br).max(0.001),
+                    br,
+                ),
+                _ => Collider::cylinder(half_height, radius),
+            };
+            Collider::compound(vec![(
+                Vec3::ZERO,
+                Quat::from_rotation_arc(Vec3::Y, axis),
+                inner,
+            )])
+        }
         ColliderShape::MeshObject { model_name }    => match mode {
             SimMode::Precomputed       => load_compound(&model_name),
             SimMode::Raw | SimMode::Bench { .. } => {
