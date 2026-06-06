@@ -19,9 +19,9 @@ use bevy::{
 };
 use crossbeam_channel::{Receiver, Sender};
 use std::{
-    io::{BufWriter, Write},
-    path::PathBuf,
-    process::{Child, Command, Stdio},
+    io::Write,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{Arc, atomic::{AtomicBool, Ordering}},
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -55,9 +55,8 @@ struct RecordState {
     capture_pending: bool,
     finalized:       bool,
     output_path:     PathBuf,
-    ffmpeg_child:    Option<Child>,
-    frame_tx:        Option<Sender<Vec<u8>>>, // frames padded → hilo escritor (desacopla encode del render loop)
-    writer:          Option<JoinHandle<()>>,
+    frame_tx:        Option<Sender<Vec<u8>>>, // frames I420 → dispatcher (segmenta y reparte a N encoders)
+    writer:          Option<JoinHandle<()>>,  // dispatcher: pool de encoders + concat final
     null_sink:       bool,        // RECORD_NULL=1 → descarta frames, mide techo de Bevy
     t_first:         Option<Instant>, // wall-clock del primer frame piped (excluye arranque)
 }
@@ -84,50 +83,36 @@ impl Plugin for RecordPlugin {
         // de codificación es un recurso compartido que no escala). veryfast da el mejor
         // balance calidad/tamaño; RECORD_PRESET=ultrafast cuando se necesita más throughput.
         let preset = std::env::var("RECORD_PRESET").unwrap_or_else(|_| "veryfast".into());
-        // Limita los threads de libx264 para dejar cores al render de Bevy. Sin esto
-        // libx264 reclama los 12 cores y ahoga al render (contención). RECORD_X264_THREADS.
-        let x264_threads = std::env::var("RECORD_X264_THREADS").unwrap_or_else(|_| "6".into());
+        // Threads por encoder. En modo paralelo corren varios libx264 a la vez, así que
+        // cada uno usa pocos: default 3 → con RECORD_SEGMENTS=4 reparte ~12 cores. RECORD_X264_THREADS.
+        let x264_threads = std::env::var("RECORD_X264_THREADS").unwrap_or_else(|_| "3".into());
+        // Nº de encoders libx264 en paralelo. El render produce frames más rápido (techo ~9.6x)
+        // de lo que un solo libx264 los consume (~5.7x); con N encoders sobre segmentos
+        // temporales distintos el encode deja de ser el cuello. RECORD_SEGMENTS.
+        let segments: usize = std::env::var("RECORD_SEGMENTS")
+            .ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(4);
+        // Frames por segmento; cada segmento es un .mp4 que luego se concatena (-c copy).
+        // Chico = más paralelismo y archivos; grande = menos overhead y más RAM. RECORD_SEG_FRAMES.
+        let seg_frames: usize = std::env::var("RECORD_SEG_FRAMES")
+            .ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(120);
 
         let null_sink = std::env::var("RECORD_NULL").is_ok();
 
-        // Channel main world → hilo escritor. bounded da backpressure natural: si el
-        // encode se atrasara, el render loop frena en vez de acumular GB de RAM.
+        // Channel render→dispatcher. bounded da backpressure natural: si los encoders se
+        // atrasan, el render loop frena en vez de acumular GB de RAM.
         let (frame_tx, frame_rx) = crossbeam_channel::bounded::<Vec<u8>>(8);
 
-        let (ffmpeg_opt, frame_tx, writer) = if null_sink {
-            (None, None, None)
+        let (frame_tx, writer) = if null_sink {
+            (None, None)
         } else {
-            // El compute shader ya entrega yuv420p sin padding: ffmpeg lo consume directo,
-            // sin swscale (RGBA→yuv) ni crop. El pipe lleva 2.7x menos bytes que RGBA.
-            let mut ffmpeg = Command::new("ffmpeg")
-                .args([
-                    "-y",
-                    "-f",         "rawvideo",
-                    "-pix_fmt",   "yuv420p",
-                    "-s:v",       &format!("{}x{}", WIDTH, HEIGHT),
-                    "-framerate", &FPS.to_string(),
-                    "-i",         "pipe:0",
-                    "-c:v",       "libx264",
-                    "-preset",    &preset,
-                    "-crf",       "20",
-                    "-threads",   &x264_threads,
-                    "-pix_fmt",   "yuv420p",
-                    output_path.to_str().unwrap(),
-                ])
-                .stdin(Stdio::piped())
-                .spawn()
-                .expect("[record] ffmpeg not found — install with: brew install ffmpeg");
-            let stdin = ffmpeg.stdin.take().expect("ffmpeg stdin");
-
+            let out_path = output_path.clone();
+            // Dispatcher: acumula los frames I420 (3.1 MB, ya convertidos en GPU) en segmentos
+            // de seg_frames y los reparte a un pool de `segments` encoders libx264. Al cerrarse
+            // el channel espera a todos y concatena los .mp4 parciales en el archivo final.
             let writer = std::thread::spawn(move || {
-                let mut out = BufWriter::with_capacity(YUV_BYTES, stdin);
-                for raw in frame_rx.iter() {
-                    let _ = out.write_all(&raw);
-                }
-                let _ = out.flush();
+                run_dispatcher(frame_rx, segments, seg_frames, preset, x264_threads, out_path);
             });
-
-            (Some(ffmpeg), Some(frame_tx), Some(writer))
+            (Some(frame_tx), Some(writer))
         };
 
         let (sender, receiver) = crossbeam_channel::unbounded::<Vec<u8>>();
@@ -161,7 +146,6 @@ impl Plugin for RecordPlugin {
                 capture_pending: false,
                 finalized: false,
                 output_path,
-                ffmpeg_child: ffmpeg_opt,
                 frame_tx,
                 writer,
                 null_sink,
@@ -299,23 +283,148 @@ fn check_complete(mut state: ResMut<RecordState>, mut exit: EventWriter<AppExit>
         );
     }
 
-    // Cerrar el channel hace que el hilo escritor termine su loop, vacíe el BufWriter
-    // y cierre stdin de ffmpeg (EOF). Luego esperamos a que drene los frames en vuelo.
+    // Cerrar el channel hace que el dispatcher lea el último frame, despache el segmento
+    // parcial, espere a todos los encoders y concatene los .mp4 en el archivo final.
     drop(state.frame_tx.take());
+    println!("[record] {} frames capturados, encode + concat…", state.frames_captured);
     if let Some(writer) = state.writer.take() {
         let _ = writer.join();
     }
-    println!("[record] {} frames done, waiting for ffmpeg…", state.frames_captured);
-
-    if let Some(mut child) = state.ffmpeg_child.take() {
-        match child.wait() {
-            Ok(s) if s.success() => println!("[record] {} ready", state.output_path.display()),
-            Ok(s)                => eprintln!("[record] ffmpeg exited with {s}"),
-            Err(e)               => eprintln!("[record] ffmpeg error: {e}"),
-        }
-    }
+    println!("[record] {} ready", state.output_path.display());
 
     exit.write(AppExit::Success);
+}
+
+// ── Encode paralelo: dispatcher → pool de N libx264 → concat ──────────────
+//
+// Un solo libx264 no sigue el ritmo del render (techo ~9.6x vs encode ~5.7x), así que los
+// frames se acumulan. El dispatcher los corta en segmentos temporales y los reparte a N
+// encoders que corren en paralelo (el encode software SÍ escala con cores); cada segmento
+// es un .mp4 autocontenido que al final se concatena sin re-encode (-c copy, instantáneo).
+
+/// Acumula frames I420 en segmentos de `seg_frames` y los despacha a `segments` encoders.
+/// Al cerrarse `frame_rx`, despacha el segmento parcial, espera a los encoders y concatena.
+fn run_dispatcher(
+    frame_rx:   Receiver<Vec<u8>>,
+    segments:   usize,
+    seg_frames: usize,
+    preset:     String,
+    x264:       String,
+    output:     PathBuf,
+) {
+    let dir  = output.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("record").to_string();
+
+    // Pool: cada worker toma (idx, buffer I420) y produce {stem}.segNNNN.mp4. El channel
+    // bounded acota cuántos segmentos viven en RAM a la vez (backpressure → frena el render).
+    let (seg_tx, seg_rx) = crossbeam_channel::bounded::<(usize, Vec<u8>)>(segments);
+    let workers: Vec<JoinHandle<()>> = (0..segments)
+        .map(|_| {
+            let seg_rx = seg_rx.clone();
+            let preset = preset.clone();
+            let x264   = x264.clone();
+            let dir    = dir.clone();
+            let stem   = stem.clone();
+            std::thread::spawn(move || {
+                for (idx, buf) in seg_rx.iter() {
+                    encode_segment(&dir, &stem, idx, &buf, &preset, &x264);
+                }
+            })
+        })
+        .collect();
+    drop(seg_rx);
+
+    let mut buf    = Vec::with_capacity(seg_frames * YUV_BYTES);
+    let mut in_seg = 0usize;
+    let mut idx    = 0usize;
+    for raw in frame_rx.iter() {
+        buf.extend_from_slice(&raw);
+        in_seg += 1;
+        if in_seg == seg_frames {
+            let full = std::mem::replace(&mut buf, Vec::with_capacity(seg_frames * YUV_BYTES));
+            let _ = seg_tx.send((idx, full));
+            idx += 1;
+            in_seg = 0;
+        }
+    }
+    if in_seg > 0 {
+        let _ = seg_tx.send((idx, buf));
+        idx += 1;
+    }
+    drop(seg_tx);
+    for w in workers { let _ = w.join(); }
+
+    concat_segments(&dir, &stem, idx, &output);
+}
+
+/// Codifica un segmento I420 a {stem}.segNNNN.mp4 con su propio libx264. write_all bloquea
+/// mientras ffmpeg consume el buffer → este worker queda ocupado todo el encode (lo cual es
+/// justo el trabajo que paraleliza con los demás workers sobre otros segmentos).
+fn encode_segment(dir: &Path, stem: &str, idx: usize, buf: &[u8], preset: &str, x264: &str) {
+    let seg_path = dir.join(format!(".{stem}.seg{idx:04}.mp4"));
+    let mut child = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",         "rawvideo",
+            "-pix_fmt",   "yuv420p",
+            "-s:v",       &format!("{}x{}", WIDTH, HEIGHT),
+            "-framerate", &FPS.to_string(),
+            "-i",         "pipe:0",
+            "-c:v",       "libx264",
+            "-preset",    preset,
+            "-crf",       "20",
+            "-threads",   x264,
+            "-pix_fmt",   "yuv420p",
+            seg_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("[record] ffmpeg not found — install with: brew install ffmpeg");
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(buf); // al salir del scope, stdin se cierra → EOF para ffmpeg
+    }
+    let _ = child.wait();
+}
+
+/// Une los segmentos en orden con el demuxer concat (-c copy, sin re-encode) y limpia los
+/// temporales. Cada segmento ya arranca con keyframe, así que el corte es exacto.
+fn concat_segments(dir: &Path, stem: &str, count: usize, output: &Path) {
+    if count == 0 {
+        return;
+    }
+    let list_path = dir.join(format!(".{stem}.concat.txt"));
+    let mut list = String::new();
+    for i in 0..count {
+        // Rutas relativas al directorio del list file (donde viven los segmentos).
+        list.push_str(&format!("file '.{stem}.seg{i:04}.mp4'\n"));
+    }
+    let _ = std::fs::write(&list_path, &list);
+
+    let status = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",     "concat",
+            "-safe",  "0",
+            "-i",     list_path.to_str().unwrap(),
+            "-c",     "copy",
+            output.to_str().unwrap(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let _ = std::fs::remove_file(&list_path);
+    for i in 0..count {
+        let _ = std::fs::remove_file(dir.join(format!(".{stem}.seg{i:04}.mp4")));
+    }
+
+    if let Ok(s) = status {
+        if !s.success() {
+            eprintln!("[record] concat ffmpeg exited with {s}");
+        }
+    }
 }
 
 // ── RenderGraph: GPU texture → CPU buffer → channel ──────────────────────
