@@ -7,17 +7,33 @@ Objetivo: aprovechar el M4 Pro al 100% para acelerar la generación de video.
 
 ## Estado de las ramas
 
+Todas las cifras medidas **con cargador (AC power)** salvo aviso. Demo = standalone (60s);
+canicas 60s = flujo real del usuario.
+
 | Rama | Contenido | Demo | Canicas (flujo real) |
 |------|-----------|------|----------------------|
-| `master` | baseline (timing determinista ManualDuration) | 3.3x | **2.8x** |
+| `master` | baseline (timing determinista ManualDuration) | 3.3x | 2.8x |
 | `perf/record-pipeline` | Fases 1-3: libx264 + hilo escritor + readback async + crop | 7.8x | 5.2x |
-| `perf/yuv-gpu` | Fase 4: + conversión RGBA→yuv420p en GPU (compute) | **9.0x** | **5.8x** |
+| `perf/yuv-gpu` | Fase 4: + conversión RGBA→yuv420p en GPU (compute) | **9.5x** | ~5.0x |
+| `perf/yuv-cpu` | (descartada) conversión en CPU con rayon — PEOR, ver abajo | 7.3x | 4.6x |
+| `perf/encode-parallel` | sobre yuv-gpu: N libx264 en paralelo + concat | 8.6x* | **5.76x** |
 
-`perf/yuv-gpu` es la rama de cabecera con todo el trabajo. **Aún sin mergear a master** (decisión pendiente).
+`*` el demo es render-bound, no encode-bound → el encode paralelo no ayuda ahí (solo añade
+contención); su valor está en canicas (encode-bound). `perf/encode-parallel` es la rama de
+cabecera. **Sin mergear a master** (decisión pendiente).
 
 Medidas: "demo" = binario standalone `rapier-bevy` (escena ligera). "canicas" = `canicasbrawl-rapier`
-(escena real, pesada, más GPU-bound). xRealtime = segundos de video / segundos de wall-clock.
-"steady-state" excluye arranque/carga de assets; "wall-clock" lo incluye.
+(escena real, pesada, más GPU-bound). xRealtime = segundos de video / segundos de tiempo. El log
+`STEADY-STATE` mide solo la CAPTURA (excluye arranque); con encode paralelo eso miente (queda
+encode en cola) → usar el `TOTAL` (captura+encode+concat, sin arranque) que ahora imprime el binario.
+
+## ⚡ Recomendación: grabar SIEMPRE con el cargador conectado
+
+En MacBook, batería vs AC power cambia el techo de CPU/GPU (macOS limita el power en batería).
+Observado al medir: conectar el cargador subió el techo NULL del demo (GPU) de ~9.6x a **12.45x**
+y el de canicas de ~7.8x a **9.63x**. **Para producir video con `--record`, enchufá la compu** —
+es speedup gratis. Y para comparar variantes, medí siempre en el mismo estado de energía
+(`pmset -g batt` debe decir `AC Power`), o los números no son comparables.
 
 ## Cómo medir / flags
 
@@ -70,26 +86,79 @@ ffmpeg -ss 5 -i out.mp4 -frames:v 1 -vf signalstats,metadata=print:key=lavfi.sig
    techo de Bevy de 15.6x a 9.4x** porque las barreras render→compute→copy se serializan en la
    GPU. El pipeline completo (9.0x demo) ya casi toca ese techo → el pipe dejó de ser el cuello.
 
-## El hallazgo clave para seguir (PRIORIDAD)
+## La variante CPU: MEDIDA Y DESCARTADA (2026-06-06)
 
-**Sospecha fuerte: la conversión yuv en CPU sería MÁS rápida que en GPU en estas escenas.**
+La hipótesis prioritaria era que convertir yuv **en CPU** (cores ociosos) sería más rápido que
+en GPU. Se implementó en la rama **`perf/yuv-cpu`** (readback RGBA sin compute + conversión
+RGBA→I420 con rayon, BT.601 idéntico al shader; flags `RECORD_CONV_THREADS`/`RECORD_X264_THREADS`)
+y se midió contra `perf/yuv-gpu` **en las mismas condiciones (con cargador, AC power)**.
 
-- El pipeline es **GPU-bound** (demo: ~5.4 de 12 cores usados → 6.6 cores OCIOSOS).
-- El compute GPU resuelve el cuello del pipe **pero le roba trabajo al render** (techo 15.6→9.4x).
-- El experimento `RECORD_HALFPIPE` (mandar 3.1MB/frame al pipe SIN el costo del compute) dio
-  **~11x en el demo** — el techo si reducimos el pipe sin tocar la GPU.
-- Conversión RGBA→I420 en CPU (en los cores ociosos, en el hilo escritor o un pool): mantiene
-  el readback RGBA (techo Bevy 15.6x, no es cuello) y reduce el pipe 2.7x. Cuello esperado:
-  el render (15.6x) o la conversión CPU. **Potencial ~11x demo** vs 9x del GPU.
+**Resultado: la variante CPU es PEOR en ambas escenas.**
 
-### Plan para la variante CPU
-1. En el hilo escritor (o un pool de 2-4 hilos para repartir), convertir el frame RGBA (con
-   padding) a I420 antes del `write_all`. Usar un crate SIMD (`yuvutils-rs` o `dcv-color-primitives`,
-   ambos con NEON) o a mano con NEON. **Cuidado con el color**: BT.601 limited range, y los bytes
-   RGBA del framebuffer ya están en gamma (NO linearizar) — igual que hace el shader actual y swscale.
-2. Volver al readback RGBA (revertir el compute) + ffmpeg con `-pix_fmt yuv420p` recibiendo el I420 ya hecho.
-3. Medir `RECORD_NULL` (debe volver a ~15.6x) y completo. Comparar contra yuv GPU (9x).
-4. Repartir cores: barrer nº de hilos de conversión vs `RECORD_X264_THREADS` (suma ≤ 12).
+| Escena  | Variante     | Techo (NULL) | Completo (mejor reparto) |
+|---------|--------------|--------------|--------------------------|
+| Demo    | CPU (rayon)  | 10.0x        | 7.28x (conv6/x264·6)     |
+| Demo    | GPU (compute)| **12.45x**   | **9.48x**                |
+| Canicas | CPU (rayon)  | 9.0x         | 4.63x (conv4/x264·6)     |
+| Canicas | GPU (compute)| **9.63x**    | **5.70x**                |
+
+Barrer el reparto conv/x264 (2..8 vs 4..8) casi no movió la aguja (demo 6.9–7.5x): el cuello no
+es la conversión ni el encode, es estructural.
+
+### Por qué pierde (causa raíz: ancho de banda en memoria unificada)
+- **El techo NULL ya es menor con readback RGBA** (demo 10.0x vs 12.45x del I420; canicas 9.0 vs
+  9.63). En Apple Silicon la memoria es unificada: mover **8.3 MB RGBA/frame** por la CPU
+  (readback + `to_vec` + lectura en la conversión) compite por el MISMO ancho de banda que usa
+  el render de la GPU. El compute GPU mueve **2.7x menos bytes** (3.1 MB I420) y mantiene la
+  conversión on-chip → menos presión de BW → techo más alto.
+- El gap NULL→completo en CPU es grande (demo 10→7.3, canicas 9→4.6): la conversión y el
+  `to_vec` de 8.3 MB pelean CPU+BW con render y libx264.
+
+### El "techo de 15.6x" era un ARTEFACTO
+Las mediciones originales de "techo de Bevy = 15.6x" en el demo se tomaron **cuando la cámara
+aún NO apuntaba al OffscreenTarget** (grababa negro → render casi vacío). Al corregir la cámara
+(commit 7f742f9), el render real del demo topa a **~12.5x** (readback I420) / ~10x (readback RGBA).
+Por eso "~11x en CPU" era imposible: estaba por encima del techo real del render. **No existían
+6.6 cores ociosos esperando trabajo útil**; el pipeline ya estaba cerca de su techo real.
+
+### Veredicto
+**`perf/yuv-gpu` (compute) supera a la CPU** en ambas escenas. `perf/yuv-cpu` se conserva como
+registro del experimento (resultado negativo, bien medido).
+
+## Encode en chunks paralelos (`perf/encode-parallel`) — IMPLEMENTADO
+
+Sobre `perf/yuv-gpu`. Un solo libx264 no sigue el ritmo del render en canicas (encode-bound), así
+que el dispatcher corta el stream I420 en segmentos temporales (`RECORD_SEG_FRAMES`) y los reparte
+a un pool de `RECORD_SEGMENTS` encoders libx264 en paralelo; cada segmento es un .mp4 autocontenido
+que al final se concatena con `-c copy` (sin re-encode, instantáneo, corte exacto por keyframe).
+
+**Resultado (canicas 60s, AC, mejor config `RECORD_SEGMENTS=6 RECORD_SEG_FRAMES=90 RECORD_X264_THREADS=2`):**
+- single-encoder (yuv-gpu): ~5.0x sostenido.
+- encode-parallel: **captura 6.02x, TOTAL 5.76x** → **~15% más rápido** sostenido.
+
+Correctness validada: 1800/3600 frames exactos, 30/60s, yuv420p, YAVG idéntico al single-encoder.
+
+**Por qué la ganancia es modesta (no el salto a ~9x):** a 60s sostenidos los N encoders compiten
+con render+compute+readback por los 12 cores. El techo de canicas (9.63x NULL) lo pone la GPU
+(render de la escena + compute), no el encode. El encode paralelo cierra el gap encode→techo pero
+no sube el techo. En el DEMO (render-bound) no ayuda: solo añade contención (8.6x vs 9.5x single).
+
+**Cuándo usarlo:** escenas encode-bound (mucha CPU libre, render rápido). Para canicas, sí. Flags:
+`RECORD_SEGMENTS` (def 4), `RECORD_SEG_FRAMES` (def 120), `RECORD_X264_THREADS` por encoder (def 3).
+
+## Qué queda por intentar (el cuello real ahora)
+
+Con la conversión ya resuelta vía GPU, los techos dicen dónde está el cuello de cada escena:
+- **Demo (render+compute bound):** completo 9.48x vs techo 12.45x. El gap es render/compute en la
+  GPU. Candidato: **async compute** — solapar el compute de conversión con el render del frame
+  siguiente (segunda queue Metal). Si se elimina la serialización render→compute, el techo podría
+  subir. Riesgo: wgpu/Metal lo soportan parcialmente; complejo.
+- **Canicas (encode bound):** completo 5.70x vs techo 9.63x. El gap grande es libx264/pipe, NO el
+  render. Candidato: **encode en chunks temporales paralelos** (varios libx264 → concat). El
+  encode software SÍ escala con cores. O `RECORD_PRESET=ultrafast`. También optimizar la ESCENA
+  (sombras, draw calls) subiría el techo NULL.
+- **NV12 en vez de I420**: mismo tamaño (3.1 MB), un solo plano de croma; podría simplificar el
+  shader y algunos paths de encode lo prefieren.
 
 ### Otras ideas no exploradas (intentarlo TODO)
 - **Reducir las barreras del compute GPU**: investigar si el compute puede solaparse con el

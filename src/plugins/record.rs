@@ -290,6 +290,18 @@ fn check_complete(mut state: ResMut<RecordState>, mut exit: EventWriter<AppExit>
     if let Some(writer) = state.writer.take() {
         let _ = writer.join();
     }
+
+    // Con encode paralelo el STEADY-STATE (solo captura) miente: al terminar de capturar
+    // quedan segmentos encodeando. Este TOTAL (captura + tail de encode + concat, sin el
+    // arranque) es el número honesto de cuánto tarda en quedar el mp4.
+    if let Some(t0) = state.t_first {
+        let secs = t0.elapsed().as_secs_f64();
+        let video_secs = state.total_frames as f64 / FPS as f64;
+        println!(
+            "[record] TOTAL (captura+encode+concat, sin arranque): {:.2}s → {:.2}x realtime",
+            secs, video_secs / secs,
+        );
+    }
     println!("[record] {} ready", state.output_path.display());
 
     exit.write(AppExit::Success);
