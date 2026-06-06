@@ -5,22 +5,25 @@ Objetivo: aprovechar el M4 Pro al 100% para acelerar la generación de video.
 
 **Hardware de referencia:** Apple M4 Pro — 12 cores (8P+4E), 24 GiB, 2 motores de codificación de video.
 
-## Estado de las ramas
+## Estado: MERGEADO A MASTER
 
-Todas las cifras medidas **con cargador (AC power)** salvo aviso. Demo = standalone (60s);
-canicas 60s = flujo real del usuario.
+`master` ya tiene el pipeline completo (compute GPU + readback async + encode paralelo).
+Resultado en el flujo real (canicas 60s): **2.8x → 5.76x** (2.06x más rápido). Demo ~9x.
 
-| Rama | Contenido | Demo | Canicas (flujo real) |
-|------|-----------|------|----------------------|
-| `master` | baseline (timing determinista ManualDuration) | 3.3x | 2.8x |
+Todas las cifras medidas **con cargador (AC power)**. Demo = standalone (60s);
+canicas 60s = flujo real del usuario. Las ramas `perf/*` son el historial del proceso
+(cada fase + los experimentos), conservadas como registro:
+
+| Rama / hito | Contenido | Demo | Canicas (flujo real) |
+|-------------|-----------|------|----------------------|
+| baseline (pre-perf) | timing determinista ManualDuration | 3.3x | 2.8x |
 | `perf/record-pipeline` | Fases 1-3: libx264 + hilo escritor + readback async + crop | 7.8x | 5.2x |
 | `perf/yuv-gpu` | Fase 4: + conversión RGBA→yuv420p en GPU (compute) | **9.5x** | ~5.0x |
 | `perf/yuv-cpu` | (descartada) conversión en CPU con rayon — PEOR, ver abajo | 7.3x | 4.6x |
-| `perf/encode-parallel` | sobre yuv-gpu: N libx264 en paralelo + concat | 8.6x* | **5.76x** |
+| `perf/encode-parallel` → **`master`** | + N libx264 en paralelo + concat | 8.6x* | **5.76x** |
 
 `*` el demo es render-bound, no encode-bound → el encode paralelo no ayuda ahí (solo añade
-contención); su valor está en canicas (encode-bound). `perf/encode-parallel` es la rama de
-cabecera. **Sin mergear a master** (decisión pendiente).
+contención); su valor está en canicas (encode-bound).
 
 Medidas: "demo" = binario standalone `rapier-bevy` (escena ligera). "canicas" = `canicasbrawl-rapier`
 (escena real, pesada, más GPU-bound). xRealtime = segundos de video / segundos de tiempo. El log
@@ -64,6 +67,10 @@ ffmpeg -ss 5 -i out.mp4 -frames:v 1 -vf signalstats,metadata=print:key=lavfi.sig
 ```
 
 ## Diagnóstico: el cuello se movió 4 veces
+
+> Registro cronológico del proceso. **Ojo:** los "techos de 15.6x" de los puntos 2 y 4 resultaron
+> ser un ARTEFACTO (cámara sin apuntar al target = render vacío); el techo real del demo es ~12.5x.
+> Ver la sección "El techo de 15.6x era un ARTEFACTO" más abajo.
 
 1. **Encoder hardware (`h264_videotoolbox`) topa a ~240fps / 4x** a 1080×1920 y **NO escala**
    con procesos paralelos (el bloque de codificación es recurso compartido). Medido: N=1,2,3,4
@@ -175,7 +182,7 @@ El pipeline (readback + conversión + pipe) ya casi no es el cuello.
 - **NV12 en vez de I420**: marginal (compute ya ~gratis); solo si algún encoder lo exige.
 - **Bajar latencia de arranque** (carga de assets GLB/PNG): ayuda a clips cortos; a 60s se diluye.
 
-## Arquitectura actual (perf/encode-parallel)
+## Arquitectura actual (en master)
 
 ```
 Render escena → textura RGBA (offscreen, sRGB)
