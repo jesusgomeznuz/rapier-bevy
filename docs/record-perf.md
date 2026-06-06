@@ -146,37 +146,36 @@ no sube el techo. En el DEMO (render-bound) no ayuda: solo añade contención (8
 **Cuándo usarlo:** escenas encode-bound (mucha CPU libre, render rápido). Para canicas, sí. Flags:
 `RECORD_SEGMENTS` (def 4), `RECORD_SEG_FRAMES` (def 120), `RECORD_X264_THREADS` por encoder (def 3).
 
-## Qué queda por intentar (el cuello real ahora)
+## Diagnóstico: ¿cuánto cuesta el compute? (RECORD_NO_COMPUTE) — el compute es CASI GRATIS
 
-Con la conversión ya resuelta vía GPU, los techos dicen dónde está el cuello de cada escena:
-- **Demo (render+compute bound):** completo 9.48x vs techo 12.45x. El gap es render/compute en la
-  GPU. Candidato: **async compute** — solapar el compute de conversión con el render del frame
-  siguiente (segunda queue Metal). Si se elimina la serialización render→compute, el techo podría
-  subir. Riesgo: wgpu/Metal lo soportan parcialmente; complejo.
-- **Canicas (encode bound):** completo 5.70x vs techo 9.63x. El gap grande es libx264/pipe, NO el
-  render. Candidato: **encode en chunks temporales paralelos** (varios libx264 → concat). El
-  encode software SÍ escala con cores. O `RECORD_PRESET=ultrafast`. También optimizar la ESCENA
-  (sombras, draw calls) subiría el techo NULL.
-- **NV12 en vez de I420**: mismo tamaño (3.1 MB), un solo plano de croma; podría simplificar el
-  shader y algunos paths de encode lo prefieren.
+Flag `RECORD_NO_COMPUTE`: salta los dispatches de conversión manteniendo copy+readback iguales,
+para aislar el costo GPU del compute. Medido (techo NULL, AC):
 
-### Otras ideas no exploradas (intentarlo TODO)
-- **Reducir las barreras del compute GPU**: investigar si el compute puede solaparse con el
-  render del frame siguiente (async compute / segunda queue). wgpu/Metal lo soporta parcialmente.
-  Si se elimina la serialización render→compute, el techo GPU podría volver hacia 15x.
-- **NV12 en vez de I420**: videotoolbox/algunos paths prefieren NV12 (Y plano + UV intercalado).
-  Mismo tamaño (3.1MB); podría simplificar el shader (un solo plano de croma) y el empaquetado.
-- **Encodear en chunks temporales con varios `libx264` en paralelo**: el encode software SÍ
-  escala con cores (a diferencia del HW). Si tras la conversión CPU el encode vuelve a ser cuello,
-  partir el stream en N segmentos → N procesos → concat. Ojo: la conversión CPU y los N encoders
-  competirían por los 12 cores; medir el reparto óptimo.
-- **Escena de canicas es GPU-bound a 8.93x** (su `RECORD_NULL`): ahí el techo lo pone el render
-  mismo (sombras, muchos sprites). Para subir canicas habría que optimizar la ESCENA (no el
-  pipeline): revisar shadow maps, draw calls, materiales. El pipeline ya casi no es el cuello ahí.
-- **Bajar la latencia de arranque**: el wall-clock incluye carga de assets (GLB, PNGs). En videos
-  cortos pesa; para 30s el arranque (~1.5s) diluye el speedup. Precargar/streamear assets ayudaría.
+| Escena | con compute | sin compute | costo del compute |
+|--------|-------------|-------------|-------------------|
+| Demo   | 12.13–12.17x| 12.38–12.43x| **~2%** (señal limpia) |
+| Canicas| 9.49–9.74x  | 8.24x       | bajo el ruido (varianza ±0.7x) |
 
-## Arquitectura actual (perf/yuv-gpu)
+**El compute shader cuesta ~2% del tiempo de GPU.** Esto cierra dos caminos con datos:
+- **async compute: DESCARTADO.** Aunque se solapara perfecto el compute con el render, el techo
+  subiría ≤2%. Y en el M4 Pro (GPU unificada TBDR) render y compute comparten los MISMOS núcleos
+  ALU → no hay solapamiento real que ganar. Alto esfuerzo (segunda queue + sync manual en
+  wgpu/Bevy), beneficio ~0. No vale la pena.
+- **optimizar el compute (NV12, menos dispatches, fp16): DESCARTADO.** Ganaría ≤2%.
+
+**El techo lo pone el RENDER de la escena.** Demo 12.4x, canicas 9.6x = render puro de cada escena.
+El pipeline (readback + conversión + pipe) ya casi no es el cuello.
+
+## Qué queda (y dónde NO seguir)
+
+- **Canicas (flujo real): el cuello es la escena, no el pipeline.** Su techo 9.6x lo fija el render
+  (sombras, draw calls, materiales, nº de sprites). Subirlo es trabajo en **`canicasbrawl-rapier`**
+  (shadow maps, batching, menos overdraw), no en este pipeline. El pipeline ya entrega ~5.76x de
+  9.6x posibles; el resto se lo come la contención encode↔render a 60s sostenidos.
+- **NV12 en vez de I420**: marginal (compute ya ~gratis); solo si algún encoder lo exige.
+- **Bajar latencia de arranque** (carga de assets GLB/PNG): ayuda a clips cortos; a 60s se diluye.
+
+## Arquitectura actual (perf/encode-parallel)
 
 ```
 Render escena → textura RGBA (offscreen, sRGB)
@@ -184,8 +183,10 @@ Render escena → textura RGBA (offscreen, sRGB)
   → copy_buffer_to_buffer → anillo[k] (MAP_READ, 3.1MB)
   → [release_buffers @ Prepare] garantiza buffers[k] desmapeado antes del node
   → [map_buffers @ post-Render] map_async(buffers[k]) → cola FIFO
-  → RenderWorldSender → MainWorldReceiver → hilo escritor (BufWriter) → ffmpeg stdin
-  → libx264 veryfast crf20 -pix_fmt yuv420p → outputs/record_Ns.mp4
+  → RenderWorldSender → MainWorldReceiver → dispatcher
+  → dispatcher corta en segmentos de RECORD_SEG_FRAMES → pool de RECORD_SEGMENTS encoders
+  → cada encoder: libx264 veryfast crf20 → {stem}.segNNNN.mp4 (en paralelo)
+  → al cerrar: ffmpeg concat -c copy → outputs/record_Ns.mp4 (sin re-encode)
 ```
 
 Notas de correctness:

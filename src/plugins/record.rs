@@ -97,6 +97,9 @@ impl Plugin for RecordPlugin {
             .ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(120);
 
         let null_sink = std::env::var("RECORD_NULL").is_ok();
+        // Diagnóstico: salta los dispatches del compute (mantiene copy+readback iguales) para
+        // aislar cuánto del techo GPU se va en la conversión vs el render de la escena.
+        let no_compute = std::env::var("RECORD_NO_COMPUTE").is_ok();
 
         // Channel render→dispatcher. bounded da backpressure natural: si los encoders se
         // atrasan, el render loop frena en vez de acumular GB de RAM.
@@ -172,6 +175,7 @@ impl Plugin for RecordPlugin {
         render_app
             .insert_resource(RenderWorldSender(sender))
             .insert_resource(YuvShader(shader))
+            .insert_resource(ComputeMode { skip: no_compute })
             .init_resource::<ReadbackQueue>()
             .add_systems(ExtractSchedule, image_copy_extract)
             .add_systems(
@@ -480,6 +484,13 @@ impl ImageCopier {
 #[derive(Resource)]
 struct YuvShader(Handle<Shader>);
 
+/// Diagnóstico (RECORD_NO_COMPUTE): si `skip`, el node omite los dispatches de conversión
+/// pero mantiene copy_buffer_to_buffer + readback idénticos → aísla el costo GPU del compute.
+#[derive(Resource)]
+struct ComputeMode {
+    skip: bool,
+}
+
 /// Pipelines de compute (luma y croma) y su bind group layout.
 #[derive(Resource)]
 struct YuvPipeline {
@@ -576,6 +587,7 @@ impl render_graph::Node for ImageCopyDriver {
         let copiers    = world.resource::<ImageCopiers>();
         let gpu_images = world.resource::<RenderAssets<bevy::render::texture::GpuImage>>();
         let cache      = world.resource::<PipelineCache>();
+        let skip_compute = world.resource::<ComputeMode>().skip;
 
         // Recursos de compute creados lazily por ensure_yuv_resources; los primeros
         // frames pueden no tenerlos todavía.
@@ -617,7 +629,8 @@ impl render_graph::Node for ImageCopyDriver {
             );
 
             // Conversión RGBA → I420 en la GPU, fundida en el encoder del frame.
-            {
+            // RECORD_NO_COMPUTE salta los dispatches (diagnóstico del costo del compute).
+            if !skip_compute {
                 let mut pass = render_context
                     .command_encoder()
                     .begin_compute_pass(&ComputePassDescriptor::default());
