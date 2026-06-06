@@ -6,9 +6,12 @@ use bevy::{
         render_asset::{RenderAssetUsages, RenderAssets},
         render_graph::{self, NodeRunError, RenderGraph, RenderGraphContext, RenderLabel},
         render_resource::{
-            Buffer, BufferDescriptor, BufferUsages, Extent3d,
-            Maintain, MapMode, TexelCopyBufferInfo, TexelCopyBufferLayout, TextureDimension,
-            TextureFormat, TextureUsages,
+            BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer, BufferDescriptor,
+            BufferUsages, CachedComputePipelineId, ComputePassDescriptor,
+            ComputePipelineDescriptor, Extent3d, Maintain, MapMode, PipelineCache, Shader,
+            ShaderStages, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
+            TextureViewDescriptor,
+            binding_types::{storage_buffer, texture_2d},
         },
         renderer::{RenderContext, RenderDevice},
     },
@@ -27,6 +30,10 @@ use std::{
 const WIDTH:    u32 = 1080;
 const HEIGHT:   u32 = 1920;
 const FPS:      u32 = 60;
+
+/// Tamaño de un frame I420 (yuv420p): Y a resolución plena + U y V a 1/4. Lo que el
+/// compute shader produce y se lee de vuelta — 2.7x menos que RGBA, sin padding de fila.
+const YUV_BYTES: usize = (WIDTH as usize * HEIGHT as usize) * 3 / 2;
 
 /// Inserted by RecordPlugin before GraphicsPlugin runs,
 /// so the camera renders to this image instead of the window.
@@ -72,14 +79,6 @@ impl Plugin for RecordPlugin {
             .join(format!("record_{}s.mp4", self.duration_secs));
         std::fs::create_dir_all("outputs").expect("cannot create outputs/");
 
-        let padded_bytes = {
-            let row_bytes = WIDTH as usize * 4;
-            let align = 256usize;
-            row_bytes + (align - row_bytes % align) % align
-        };
-
-        let pix_fmt = "rgba"; // offscreen Image usa TextureFormat::bevy_default() = RGBA en todas las plataformas
-
         // El encoder por software libx264 satura los 12 cores del M4 y alcanza ~15-20x,
         // muy por encima del encoder de hardware (h264_videotoolbox topa a ~4x: el bloque
         // de codificación es un recurso compartido que no escala). veryfast da el mejor
@@ -95,29 +94,19 @@ impl Plugin for RecordPlugin {
         // encode se atrasara, el render loop frena en vez de acumular GB de RAM.
         let (frame_tx, frame_rx) = crossbeam_channel::bounded::<Vec<u8>>(8);
 
-        // wgpu alinea cada fila a 256 bytes. En vez de quitar ese padding en CPU (1920
-        // memcpy/frame), tratamos el buffer crudo como una imagen más ancha y dejamos que
-        // ffmpeg recorte con `crop` (gratis, en su propio thread). El hilo escritor hace
-        // así un único write contiguo sin tocar los datos.
-        let padded_width = padded_bytes / 4;
-
         let (ffmpeg_opt, frame_tx, writer) = if null_sink {
             (None, None, None)
         } else {
-            let mut cmd = Command::new("ffmpeg");
-            cmd.args([
-                "-y",
-                "-f",         "rawvideo",
-                "-pix_fmt",   pix_fmt,
-                "-s:v",       &format!("{}x{}", padded_width, HEIGHT),
-                "-framerate", &FPS.to_string(),
-                "-i",         "pipe:0",
-            ]);
-            if padded_width as u32 != WIDTH {
-                cmd.args(["-vf", &format!("crop={}:{}:0:0", WIDTH, HEIGHT)]);
-            }
-            let mut ffmpeg = cmd
+            // El compute shader ya entrega yuv420p sin padding: ffmpeg lo consume directo,
+            // sin swscale (RGBA→yuv) ni crop. El pipe lleva 2.7x menos bytes que RGBA.
+            let mut ffmpeg = Command::new("ffmpeg")
                 .args([
+                    "-y",
+                    "-f",         "rawvideo",
+                    "-pix_fmt",   "yuv420p",
+                    "-s:v",       &format!("{}x{}", WIDTH, HEIGHT),
+                    "-framerate", &FPS.to_string(),
+                    "-i",         "pipe:0",
                     "-c:v",       "libx264",
                     "-preset",    &preset,
                     "-crf",       "20",
@@ -130,10 +119,8 @@ impl Plugin for RecordPlugin {
                 .expect("[record] ffmpeg not found — install with: brew install ffmpeg");
             let stdin = ffmpeg.stdin.take().expect("ffmpeg stdin");
 
-            // Hilo dedicado: pipea el buffer crudo (con padding) a ffmpeg de un solo write.
-            // El recorte del padding lo hace ffmpeg. Saca el IO del loop de render.
             let writer = std::thread::spawn(move || {
-                let mut out = BufWriter::with_capacity(padded_bytes * HEIGHT as usize, stdin);
+                let mut out = BufWriter::with_capacity(YUV_BYTES, stdin);
                 for raw in frame_rx.iter() {
                     let _ = out.write_all(&raw);
                 }
@@ -184,6 +171,15 @@ impl Plugin for RecordPlugin {
             .add_systems(FixedUpdate, mark_capture)
             .add_systems(Update, (receive_and_pipe, check_complete).chain());
 
+        // Shader embebido en el binario (no depende del asset path del juego host).
+        let shader = app
+            .world_mut()
+            .resource_mut::<Assets<Shader>>()
+            .add(Shader::from_wgsl(
+                include_str!("rgba_to_yuv420p.wgsl"),
+                "rapier_bevy/rgba_to_yuv420p.wgsl",
+            ));
+
         let render_app = app.sub_app_mut(RenderApp);
         let mut graph  = render_app.world_mut().resource_mut::<RenderGraph>();
         graph.add_node(ImageCopyLabel, ImageCopyDriver);
@@ -191,9 +187,16 @@ impl Plugin for RecordPlugin {
 
         render_app
             .insert_resource(RenderWorldSender(sender))
+            .insert_resource(YuvShader(shader))
             .init_resource::<ReadbackQueue>()
             .add_systems(ExtractSchedule, image_copy_extract)
-            .add_systems(Render, copy_buffer_to_channel.after(RenderSet::Render));
+            .add_systems(
+                Render,
+                (
+                    (ensure_yuv_resources, release_buffers).in_set(RenderSet::Prepare),
+                    map_buffers.after(RenderSet::Render),
+                ),
+            );
     }
 }
 
@@ -213,6 +216,9 @@ fn create_offscreen_target(
     );
     render_target.texture_descriptor.usage |=
         TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
+    // Permite enlazar la textura sRGB con un view no-sRGB en el compute (lee bytes gamma
+    // sin conversión). El formato base se resuelve a Rgba8UnormSrgb por bevy_default().
+    render_target.texture_descriptor.view_formats = &[TextureFormat::Rgba8Unorm];
 
     let handle = images.add(render_target);
 
@@ -328,13 +334,13 @@ struct ImageCopier {
 }
 
 impl ImageCopier {
-    fn new(src_image: Handle<Image>, size: Extent3d, device: &RenderDevice) -> Self {
-        let padded = RenderDevice::align_copy_bytes_per_row(size.width as usize * 4);
+    fn new(src_image: Handle<Image>, _size: Extent3d, device: &RenderDevice) -> Self {
+        // Anillo de buffers MAP_READ que reciben el I420 ya convertido (3.1 MB, sin padding).
         let buffers = (0..READBACK_RING)
             .map(|i| {
                 device.create_buffer(&BufferDescriptor {
                     label:              Some(&format!("record_readback_{i}")),
-                    size:               (padded * size.height as usize) as u64,
+                    size:               YUV_BYTES as u64,
                     usage:              BufferUsages::MAP_READ | BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 })
@@ -347,6 +353,73 @@ impl ImageCopier {
             enabled: Arc::new(AtomicBool::new(true)),
         }
     }
+}
+
+/// Shader de conversión (handle compartido main↔render world).
+#[derive(Resource)]
+struct YuvShader(Handle<Shader>);
+
+/// Pipelines de compute (luma y croma) y su bind group layout.
+#[derive(Resource)]
+struct YuvPipeline {
+    layout:      BindGroupLayout,
+    pipeline_y:  CachedComputePipelineId,
+    pipeline_uv: CachedComputePipelineId,
+}
+
+/// Buffer de salida del compute (I420), creado una vez.
+#[derive(Resource)]
+struct YuvResources {
+    storage: Buffer, // STORAGE | COPY_SRC, recibe el I420 del compute
+}
+
+/// Crea pipelines y buffer de compute en el primer frame del render world, cuando
+/// RenderDevice y PipelineCache ya existen (no están disponibles en build()/finish()
+/// porque RecordPlugin añade DefaultPlugins dentro de su propio build).
+fn ensure_yuv_resources(
+    mut commands: Commands,
+    device:       Res<RenderDevice>,
+    cache:        Res<PipelineCache>,
+    shader:       Res<YuvShader>,
+    existing:     Option<Res<YuvPipeline>>,
+) {
+    if existing.is_some() {
+        return;
+    }
+    let layout = device.create_bind_group_layout(
+        "yuv_convert_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::COMPUTE,
+            (
+                texture_2d(TextureSampleType::Float { filterable: false }),
+                storage_buffer::<Vec<u32>>(false),
+            ),
+        ),
+    );
+    let mk = |entry: &str| {
+        cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: Some(format!("yuv_{entry}").into()),
+            layout: vec![layout.clone()],
+            push_constant_ranges: vec![],
+            shader: shader.0.clone(),
+            shader_defs: vec![],
+            entry_point: entry.to_string().into(),
+            zero_initialize_workgroup_memory: false,
+        })
+    };
+    commands.insert_resource(YuvPipeline {
+        pipeline_y:  mk("to_y"),
+        pipeline_uv: mk("to_uv"),
+        layout,
+    });
+    commands.insert_resource(YuvResources {
+        storage: device.create_buffer(&BufferDescriptor {
+            label:              Some("yuv_storage"),
+            size:               YUV_BYTES as u64,
+            usage:              BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }),
+    });
 }
 
 /// Cola de buffers cuyo map_async se lanzó pero aún no se recogió (en el render world).
@@ -381,31 +454,66 @@ impl render_graph::Node for ImageCopyDriver {
     ) -> Result<(), NodeRunError> {
         let copiers    = world.resource::<ImageCopiers>();
         let gpu_images = world.resource::<RenderAssets<bevy::render::texture::GpuImage>>();
+        let cache      = world.resource::<PipelineCache>();
+
+        // Recursos de compute creados lazily por ensure_yuv_resources; los primeros
+        // frames pueden no tenerlos todavía.
+        let (Some(yuv), Some(yuv_res)) = (
+            world.get_resource::<YuvPipeline>(),
+            world.get_resource::<YuvResources>(),
+        ) else {
+            return Ok(());
+        };
+
+        // Ambos pipelines deben estar compilados; si no, salta el frame (los primeros
+        // frames se descartan de todos modos por frames_to_skip).
+        let (Some(pl_y), Some(pl_uv)) = (
+            cache.get_compute_pipeline(yuv.pipeline_y),
+            cache.get_compute_pipeline(yuv.pipeline_uv),
+        ) else {
+            return Ok(());
+        };
 
         for copier in copiers.iter() {
             let Some(src) = gpu_images.get(&copier.src_image) else { continue };
-
-            let block_dim  = src.texture_format.block_dimensions();
-            let block_size = src.texture_format.block_copy_size(None).unwrap();
-            let padded     = RenderDevice::align_copy_bytes_per_row(
-                (src.size.width as usize / block_dim.0 as usize) * block_size as usize,
-            );
-
             let k = copier.frame.load(Ordering::Relaxed) % READBACK_RING;
 
-            // Funde el copy en el command encoder del frame: el render graph lo envía en
-            // el mismo submit que la cámara → un solo submit/frame en vez de dos.
-            render_context.command_encoder().copy_texture_to_buffer(
-                src.texture.as_image_copy(),
-                TexelCopyBufferInfo {
-                    buffer: &copier.buffers[k],
-                    layout: TexelCopyBufferLayout {
-                        offset:         0,
-                        bytes_per_row:  Some(std::num::NonZero::new(padded as u32).unwrap().into()),
-                        rows_per_image: None,
-                    },
-                },
-                src.size,
+            // View no-sRGB sobre la textura del render: el shader lee los bytes gamma
+            // directamente (sin conversión sRGB→linear, que cuesta un pow por canal).
+            let gamma_view = src.texture.create_view(&TextureViewDescriptor {
+                label:  Some("yuv_src_unorm"),
+                format: Some(TextureFormat::Rgba8Unorm),
+                ..default()
+            });
+
+            let bind_group = render_context.render_device().create_bind_group(
+                "yuv_convert_bg",
+                &yuv.layout,
+                &BindGroupEntries::sequential((
+                    &gamma_view,
+                    yuv_res.storage.as_entire_binding(),
+                )),
+            );
+
+            // Conversión RGBA → I420 en la GPU, fundida en el encoder del frame.
+            {
+                let mut pass = render_context
+                    .command_encoder()
+                    .begin_compute_pass(&ComputePassDescriptor::default());
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.set_pipeline(pl_y);
+                pass.dispatch_workgroups((WIDTH / 4).div_ceil(8), HEIGHT.div_ceil(8), 1);
+                pass.set_pipeline(pl_uv);
+                pass.dispatch_workgroups((WIDTH / 8).div_ceil(8), (HEIGHT / 2).div_ceil(8), 1);
+            }
+
+            // El I420 resultante (3.1 MB) va al buffer del anillo para readback async.
+            render_context.command_encoder().copy_buffer_to_buffer(
+                &yuv_res.storage,
+                0,
+                &copier.buffers[k],
+                0,
+                YUV_BYTES as u64,
             );
         }
 
@@ -413,7 +521,10 @@ impl render_graph::Node for ImageCopyDriver {
     }
 }
 
-fn copy_buffer_to_channel(
+/// Corre ANTES del node (RenderSet::Prepare): recoge los frames cuyo readback completó
+/// y, sobre todo, garantiza que buffers[k] esté DESMAPEADO antes de que el node lo
+/// reescriba este frame (un copy a un buffer mapeado es ilegal en wgpu).
+fn release_buffers(
     copiers:       Res<ImageCopiers>,
     render_device: Res<RenderDevice>,
     sender:        Res<RenderWorldSender>,
@@ -425,19 +536,29 @@ fn copy_buffer_to_channel(
         }
         let k = copier.frame.load(Ordering::Relaxed) % READBACK_RING;
 
-        // 1. Bombea callbacks de maps ya completados (no bloquea) y recoge en orden FIFO.
+        // Bombea callbacks completados y recoge en orden FIFO (no bloquea).
         render_device.poll(Maintain::Poll);
         drain_ready(&mut queue, copier, &sender);
 
-        // 2. Garantiza que buffers[k] esté libre antes de reusarlo. Si el anillo está
-        //    lleno, el frente ES buffers[k] (rotación estricta): lo drenamos bloqueando.
-        //    Solo ocurre si la GPU se quedó atrás; normalmente ya está recogido.
-        while queue.in_flight.len() >= READBACK_RING {
+        // Si buffers[k] (el que el node usará) sigue mapeado, drénalo bloqueando.
+        // Solo ocurre si la GPU se atrasó; normalmente drain_ready ya lo recogió.
+        while queue.in_flight.iter().any(|f| f.idx == k) {
             render_device.poll(Maintain::wait()).panic_on_timeout();
             drain_one_blocking(&mut queue, copier, &sender);
         }
+    }
+}
 
-        // 3. Lanza el map del buffer que el node escribió este frame (asíncrono).
+/// Corre DESPUÉS del node (after RenderSet::Render): el node ya copió el I420 a
+/// buffers[k] en este submit, así que lanzamos su map_async (asíncrono) y avanzamos
+/// el anillo. El resultado se recoge en release_buffers de un frame posterior.
+fn map_buffers(copiers: Res<ImageCopiers>, mut queue: ResMut<ReadbackQueue>) {
+    for copier in copiers.iter() {
+        if !copier.enabled.load(Ordering::Relaxed) {
+            continue;
+        }
+        let k = copier.frame.load(Ordering::Relaxed) % READBACK_RING;
+
         let (s, r) = crossbeam_channel::bounded(1);
         copier.buffers[k].slice(..).map_async(MapMode::Read, move |res| {
             let _ = s.send(res.is_ok());
