@@ -16,11 +16,12 @@ use bevy::{
 };
 use crossbeam_channel::{Receiver, Sender};
 use std::{
-    io::Write,
+    io::{BufWriter, Write},
     path::PathBuf,
     process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, atomic::{AtomicBool, Ordering}},
-    time::Duration,
+    thread::JoinHandle,
+    time::{Duration, Instant},
 };
 
 const WIDTH:    u32 = 1080;
@@ -48,9 +49,10 @@ struct RecordState {
     finalized:       bool,
     output_path:     PathBuf,
     ffmpeg_child:    Option<Child>,
-    ffmpeg_stdin:    Option<ChildStdin>,
-    row_bytes:       usize,
-    padded_bytes:    usize,
+    frame_tx:        Option<Sender<Vec<u8>>>, // frames padded → hilo escritor (desacopla encode del render loop)
+    writer:          Option<JoinHandle<()>>,
+    null_sink:       bool,        // RECORD_NULL=1 → descarta frames, mide techo de Bevy
+    t_first:         Option<Instant>, // wall-clock del primer frame piped (excluye arranque)
 }
 
 #[derive(Resource)]
@@ -76,26 +78,61 @@ impl Plugin for RecordPlugin {
             row_bytes + (align - row_bytes % align) % align
         };
 
-        let pix_fmt     = "rgba"; // offscreen Image usa TextureFormat::bevy_default() = RGBA en todas las plataformas
-        let video_codec = if cfg!(target_os = "macos") { "h264_videotoolbox" } else { "libx264" };
+        let pix_fmt = "rgba"; // offscreen Image usa TextureFormat::bevy_default() = RGBA en todas las plataformas
 
-        let mut ffmpeg = Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-f",         "rawvideo",
-                "-pix_fmt",   pix_fmt,
-                "-s:v",       &format!("{}x{}", WIDTH, HEIGHT),
-                "-framerate", &FPS.to_string(),
-                "-i",         "pipe:0",
-                "-c:v",       video_codec,
-                "-pix_fmt",   "yuv420p",
-                output_path.to_str().unwrap(),
-            ])
-            .stdin(Stdio::piped())
-            .spawn()
-            .expect("[record] ffmpeg not found — install with: brew install ffmpeg");
+        // El encoder por software libx264 satura los 12 cores del M4 y alcanza ~15-20x,
+        // muy por encima del encoder de hardware (h264_videotoolbox topa a ~4x: el bloque
+        // de codificación es un recurso compartido que no escala). veryfast da el mejor
+        // balance calidad/tamaño; RECORD_PRESET=ultrafast cuando se necesita más throughput.
+        let preset = std::env::var("RECORD_PRESET").unwrap_or_else(|_| "veryfast".into());
 
-        let ffmpeg_stdin = ffmpeg.stdin.take();
+        let null_sink = std::env::var("RECORD_NULL").is_ok();
+
+        // Channel main world → hilo escritor. bounded da backpressure natural: si el
+        // encode se atrasara, el render loop frena en vez de acumular GB de RAM.
+        let (frame_tx, frame_rx) = crossbeam_channel::bounded::<Vec<u8>>(8);
+
+        let (ffmpeg_opt, frame_tx, writer) = if null_sink {
+            (None, None, None)
+        } else {
+            let mut ffmpeg = Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-f",         "rawvideo",
+                    "-pix_fmt",   pix_fmt,
+                    "-s:v",       &format!("{}x{}", WIDTH, HEIGHT),
+                    "-framerate", &FPS.to_string(),
+                    "-i",         "pipe:0",
+                    "-c:v",       "libx264",
+                    "-preset",    &preset,
+                    "-crf",       "20",
+                    "-pix_fmt",   "yuv420p",
+                    output_path.to_str().unwrap(),
+                ])
+                .stdin(Stdio::piped())
+                .spawn()
+                .expect("[record] ffmpeg not found — install with: brew install ffmpeg");
+            let stdin = ffmpeg.stdin.take().expect("ffmpeg stdin");
+
+            // Hilo dedicado: recibe frames padded, quita el padding de wgpu y los pipea a
+            // ffmpeg. Saca el strip (1920 filas) y el write bloqueante del loop de render,
+            // que así corre a su techo sin esperar al encode.
+            let writer = std::thread::spawn(move || {
+                let mut out = BufWriter::with_capacity(row_bytes * HEIGHT as usize, stdin);
+                for raw in frame_rx.iter() {
+                    if row_bytes == padded_bytes {
+                        let _ = out.write_all(&raw);
+                    } else {
+                        for row in raw.chunks(padded_bytes) {
+                            let _ = out.write_all(&row[..row_bytes.min(row.len())]);
+                        }
+                    }
+                }
+                let _ = out.flush();
+            });
+
+            (Some(ffmpeg), Some(frame_tx), Some(writer))
+        };
 
         let (sender, receiver) = crossbeam_channel::unbounded::<Vec<u8>>();
 
@@ -128,10 +165,11 @@ impl Plugin for RecordPlugin {
                 capture_pending: false,
                 finalized: false,
                 output_path,
-                ffmpeg_child: Some(ffmpeg),
-                ffmpeg_stdin,
-                row_bytes,
-                padded_bytes,
+                ffmpeg_child: ffmpeg_opt,
+                frame_tx,
+                writer,
+                null_sink,
+                t_first: None,
             })
             .add_systems(PreStartup, create_offscreen_target)
             .add_systems(FixedUpdate, mark_capture)
@@ -210,17 +248,14 @@ fn receive_and_pipe(receiver: Res<MainWorldReceiver>, mut state: ResMut<RecordSt
         return;
     }
 
-    // Strip wgpu row padding before piping
-    let row_bytes    = state.row_bytes;
-    let padded_bytes = state.padded_bytes;
-    if let Some(ref mut stdin) = state.ffmpeg_stdin {
-        if row_bytes == padded_bytes {
-            let _ = stdin.write_all(&raw);
-        } else {
-            for row in raw.chunks(padded_bytes) {
-                let _ = stdin.write_all(&row[..row_bytes.min(row.len())]);
-            }
-        }
+    if state.t_first.is_none() {
+        state.t_first = Some(Instant::now());
+    }
+
+    // Entrega el frame crudo (padded) al hilo escritor; el strip + write a ffmpeg
+    // ocurre fuera del loop de render. send() solo bloquea si el encode se atrasa (backpressure).
+    if let Some(ref tx) = state.frame_tx {
+        let _ = tx.send(raw);
     }
 
     state.capture_pending   = false;
@@ -238,7 +273,22 @@ fn check_complete(mut state: ResMut<RecordState>, mut exit: EventWriter<AppExit>
     }
     state.finalized = true;
 
-    drop(state.ffmpeg_stdin.take());
+    if let Some(t0) = state.t_first {
+        let secs = t0.elapsed().as_secs_f64();
+        let fps  = state.frames_captured as f64 / secs;
+        println!(
+            "[record] STEADY-STATE: {} frames en {:.2}s → {:.0} fps efectivos → {:.2}x realtime{}",
+            state.frames_captured, secs, fps, fps / FPS as f64,
+            if state.null_sink { " (NULL SINK — techo de Bevy)" } else { "" },
+        );
+    }
+
+    // Cerrar el channel hace que el hilo escritor termine su loop, vacíe el BufWriter
+    // y cierre stdin de ffmpeg (EOF). Luego esperamos a que drene los frames en vuelo.
+    drop(state.frame_tx.take());
+    if let Some(writer) = state.writer.take() {
+        let _ = writer.join();
+    }
     println!("[record] {} frames done, waiting for ffmpeg…", state.frames_captured);
 
     if let Some(mut child) = state.ffmpeg_child.take() {
