@@ -54,9 +54,16 @@ fn run_demo_sim(mode: SimMode) {
         .run();
 }
 
-fn spawn_demo_camera(mut commands: Commands) {
+fn spawn_demo_camera(mut commands: Commands, offscreen: Option<Res<plugins::record::OffscreenTarget>>) {
+    // En modo --record la cámara debe renderizar al OffscreenTarget (no hay ventana).
+    let mut camera = Camera::default();
+    if let Some(off) = &offscreen {
+        camera.target = bevy::render::camera::RenderTarget::Image(off.image.clone().into());
+    }
+
     commands.spawn((
         Camera3d::default(),
+        camera,
         Transform::from_xyz(0.0, 13.0, 22.0).looking_at(Vec3::new(0.0, 12.0, 0.0), Vec3::Y),
     ));
 

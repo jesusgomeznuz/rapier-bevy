@@ -72,8 +72,8 @@ impl Plugin for RecordPlugin {
             .join(format!("record_{}s.mp4", self.duration_secs));
         std::fs::create_dir_all("outputs").expect("cannot create outputs/");
 
-        let row_bytes   = WIDTH as usize * 4;
         let padded_bytes = {
+            let row_bytes = WIDTH as usize * 4;
             let align = 256usize;
             row_bytes + (align - row_bytes % align) % align
         };
@@ -85,6 +85,9 @@ impl Plugin for RecordPlugin {
         // de codificación es un recurso compartido que no escala). veryfast da el mejor
         // balance calidad/tamaño; RECORD_PRESET=ultrafast cuando se necesita más throughput.
         let preset = std::env::var("RECORD_PRESET").unwrap_or_else(|_| "veryfast".into());
+        // Limita los threads de libx264 para dejar cores al render de Bevy. Sin esto
+        // libx264 reclama los 12 cores y ahoga al render (contención). RECORD_X264_THREADS.
+        let x264_threads = std::env::var("RECORD_X264_THREADS").unwrap_or_else(|_| "6".into());
 
         let null_sink = std::env::var("RECORD_NULL").is_ok();
 
@@ -92,20 +95,33 @@ impl Plugin for RecordPlugin {
         // encode se atrasara, el render loop frena en vez de acumular GB de RAM.
         let (frame_tx, frame_rx) = crossbeam_channel::bounded::<Vec<u8>>(8);
 
+        // wgpu alinea cada fila a 256 bytes. En vez de quitar ese padding en CPU (1920
+        // memcpy/frame), tratamos el buffer crudo como una imagen más ancha y dejamos que
+        // ffmpeg recorte con `crop` (gratis, en su propio thread). El hilo escritor hace
+        // así un único write contiguo sin tocar los datos.
+        let padded_width = padded_bytes / 4;
+
         let (ffmpeg_opt, frame_tx, writer) = if null_sink {
             (None, None, None)
         } else {
-            let mut ffmpeg = Command::new("ffmpeg")
+            let mut cmd = Command::new("ffmpeg");
+            cmd.args([
+                "-y",
+                "-f",         "rawvideo",
+                "-pix_fmt",   pix_fmt,
+                "-s:v",       &format!("{}x{}", padded_width, HEIGHT),
+                "-framerate", &FPS.to_string(),
+                "-i",         "pipe:0",
+            ]);
+            if padded_width as u32 != WIDTH {
+                cmd.args(["-vf", &format!("crop={}:{}:0:0", WIDTH, HEIGHT)]);
+            }
+            let mut ffmpeg = cmd
                 .args([
-                    "-y",
-                    "-f",         "rawvideo",
-                    "-pix_fmt",   pix_fmt,
-                    "-s:v",       &format!("{}x{}", WIDTH, HEIGHT),
-                    "-framerate", &FPS.to_string(),
-                    "-i",         "pipe:0",
                     "-c:v",       "libx264",
                     "-preset",    &preset,
                     "-crf",       "20",
+                    "-threads",   &x264_threads,
                     "-pix_fmt",   "yuv420p",
                     output_path.to_str().unwrap(),
                 ])
@@ -114,19 +130,12 @@ impl Plugin for RecordPlugin {
                 .expect("[record] ffmpeg not found — install with: brew install ffmpeg");
             let stdin = ffmpeg.stdin.take().expect("ffmpeg stdin");
 
-            // Hilo dedicado: recibe frames padded, quita el padding de wgpu y los pipea a
-            // ffmpeg. Saca el strip (1920 filas) y el write bloqueante del loop de render,
-            // que así corre a su techo sin esperar al encode.
+            // Hilo dedicado: pipea el buffer crudo (con padding) a ffmpeg de un solo write.
+            // El recorte del padding lo hace ffmpeg. Saca el IO del loop de render.
             let writer = std::thread::spawn(move || {
-                let mut out = BufWriter::with_capacity(row_bytes * HEIGHT as usize, stdin);
+                let mut out = BufWriter::with_capacity(padded_bytes * HEIGHT as usize, stdin);
                 for raw in frame_rx.iter() {
-                    if row_bytes == padded_bytes {
-                        let _ = out.write_all(&raw);
-                    } else {
-                        for row in raw.chunks(padded_bytes) {
-                            let _ = out.write_all(&row[..row_bytes.min(row.len())]);
-                        }
-                    }
+                    let _ = out.write_all(&raw);
                 }
                 let _ = out.flush();
             });
@@ -443,13 +452,14 @@ fn copy_buffer_to_channel(
 fn drain_ready(queue: &mut ReadbackQueue, copier: &ImageCopier, sender: &RenderWorldSender) {
     while let Some(front) = queue.in_flight.front() {
         match front.rx.try_recv() {
-            Ok(_) => {
+            Ok(true) => {
                 let idx = front.idx;
                 let _ = sender.0.send(copier.buffers[idx].slice(..).get_mapped_range().to_vec());
                 copier.buffers[idx].unmap();
                 queue.in_flight.pop_front();
             }
-            Err(_) => break, // el frente aún no está listo
+            Ok(false) => { queue.in_flight.pop_front(); } // map fallido: descarta sin leer
+            Err(_) => break,                              // el frente aún no está listo
         }
     }
 }
@@ -457,8 +467,9 @@ fn drain_ready(queue: &mut ReadbackQueue, copier: &ImageCopier, sender: &RenderW
 /// Recoge exactamente el frente, asumiendo que su map ya completó (tras poll(wait)).
 fn drain_one_blocking(queue: &mut ReadbackQueue, copier: &ImageCopier, sender: &RenderWorldSender) {
     if let Some(front) = queue.in_flight.pop_front() {
-        let _ = front.rx.recv();
-        let _ = sender.0.send(copier.buffers[front.idx].slice(..).get_mapped_range().to_vec());
-        copier.buffers[front.idx].unmap();
+        if front.rx.recv().unwrap_or(false) {
+            let _ = sender.0.send(copier.buffers[front.idx].slice(..).get_mapped_range().to_vec());
+            copier.buffers[front.idx].unmap();
+        }
     }
 }
