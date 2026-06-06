@@ -49,7 +49,9 @@ RECORD_NULL=1 cargo run --release -- --record 30
 
 # tuning
 RECORD_PRESET=ultrafast   cargo run --release -- --record 30   # encoder más rápido (def veryfast)
-RECORD_X264_THREADS=10    cargo run --release -- --record 30   # threads de libx264 (def 6)
+RECORD_X264_THREADS=10    cargo run --release -- --record 30   # threads por encoder
+RECORD_SEGMENTS=6         cargo run --release -- --record 60   # nº de encoders libx264 en paralelo
+RECORD_SEG_FRAMES=90      cargo run --release -- --record 60   # frames por segmento
 
 # correr el binario directo (canicasbrawl usa target-dir compartido = rapier-bevy/target):
 #   los assets de Bevy en release se buscan junto al ejecutable → usar BEVY_ASSET_ROOT
@@ -172,6 +174,68 @@ para aislar el costo GPU del compute. Medido (techo NULL, AC):
 
 **El techo lo pone el RENDER de la escena.** Demo 12.4x, canicas 9.6x = render puro de cada escena.
 El pipeline (readback + conversión + pipe) ya casi no es el cuello.
+
+## 30fps + motion blur: PROBADO Y DESCARTADO (2026-06-06)
+
+Se exploró bajar a 30fps para ganar ~2x (el cuello es por-frame: la mitad de frames ≈ la mitad de
+tiempo). Dos intentos, ambos descartados; **el proyecto se queda en 60fps fijo.**
+
+1. **30fps con física intacta** (flag `RECORD_FPS`, ya quitado): se mantenía la física en sub-pasos
+   de 1/60 vía los *substeps* de Rapier (tick 1/30 con `substeps: 2`, render 1 por tick). Funcionaba
+   y daba ~2x (demo 7.4x→14.4x) con física idéntica (YAVG validado). PERO a 30fps el video se percibe
+   "como 15-20fps", trabado, peor con canicas rápidas.
+
+2. **La causa del trabado es la FALTA DE MOTION BLUR**, no el fps ni el Hz. Un render 3D da frames
+   instantáneos y nítidos (obturador=0); el cerebro necesita desenfoque para ligar frames (el cine a
+   24fps se ve fluido por eso). En Unity había motion blur (post-proceso) → por eso sus grabaciones a
+   30fps se veían bien. Se probó el componente `MotionBlur` de Bevy 0.16 (shutter 0.4–1.0, samples
+   2–8) en demo y canicas: **el motion blur de Bevy se ve mal en todas las intensidades** (juicio del
+   usuario). Descartado. También se descartó que fuera el Hz de física (branch `perf/record-fps-native-hz`,
+   30Hz nativo → física peor, fluidez igual; borrada).
+
+**Conclusión:** 60fps fijo es el único modo que se ve bien; `RECORD_FPS` y el motion blur se quitaron
+del código. Para un 30fps usable en el futuro haría falta un motion blur mejor que el de Bevy (o un
+post-proceso externo), NO tocar fps/Hz.
+
+## Idea futura (ALTO ROI): desacoplar sim para "casting" de resultados
+
+> Pendiente, no implementado. Idea de Jesús (2026-06-06). Probablemente la optimización de mayor
+> impacto real para producción de contenido, muy por encima de cualquier cosa del pipeline de render.
+
+**El problema de producción:** para un video de canicas querés un resultado específico (ej. que
+gane el personaje X). Hoy eso implica renderizar corridas hasta que salga la deseada → caro
+(cada render de 60s cuesta ~5-9s).
+
+**La idea:** correr SOLO la física (sin render, sin GPU, sin encode) es baratísimo — headless puro
+probablemente <1s para 60s de simulación. Entonces:
+1. **Fase búsqueda ("casting"):** correr la física N veces variando una semilla (jitter en
+   posiciones/fuerzas iniciales), evaluando un criterio de victoria (¿ganó X?). Como cada sim es
+   determinista por semilla, en el tiempo de UN render podés probar decenas/cientos de corridas
+   hasta encontrar la ideal.
+2. **Fase render:** renderizar+encodear SOLO la corrida ganadora.
+
+Esto es el "desacoplamiento" del que hablamos, pero para un propósito distinto y mucho más
+valioso: no paralelizar el render (inútil en 1 GPU), sino **buscar el resultado** corriendo la
+parte barata (física) muchas veces y rindiendo la cara (render) una sola.
+
+**ENFOQUE ELEGIDO: bake/timeline (NO semilla).** Decisión de Jesús (2026-06-06): la semilla
+(guardar la seed y re-simular en render) es **demasiado frágil** — depende de determinismo
+bit-a-bit entre búsqueda y render (orden de inserción de cuerpos, `simd-stable`, versión de
+Rapier…), y si algo difiere la ganadora cambia sin avisar. **Descartada.**
+
+En su lugar, *hornear* la simulación (patrón de VFX: el "point cache" de Houdini / Alembic):
+- **Fase búsqueda:** correr solo la física y, en la corrida ganadora, **grabar la timeline de
+  render**: por cada frame, la pose (posición + rotación `Quat`) de cada entidad visible, MÁS los
+  eventos (colisiones, hitos, quién ganó) para efectos/audio sincronizados. Tamaño chico: canicas
+  ≈ 200 cuerpos × 3600 frames × ~28 B ≈ 20 MB.
+- **Fase render:** quitar la física por completo; un sistema lee la timeline y *setea* los
+  `Transform` frame por frame, y Bevy solo dibuja. Lo que ves es lo que grabaste → **cero
+  dependencia de determinismo, cero fragilidad.** Estrictamente mejor que la semilla.
+
+**Componentes:** modo sim-only (MinimalPlugins + Rapier sin render, FixedUpdate) · criterio de
+victoria (¿existe ya en canicasbrawl?) · loop de búsqueda · grabar timeline (transforms+eventos) ·
+modo replay (setear Transforms desde la timeline, sin Rapier) → pipeline de `--record` actual.
+Estimación: MVP ≈ 1 sesión de 2-3h (sin el riesgo de determinismo, la estimación es firme).
 
 ## Qué queda (y dónde NO seguir)
 
