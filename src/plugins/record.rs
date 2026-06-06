@@ -6,11 +6,11 @@ use bevy::{
         render_asset::{RenderAssetUsages, RenderAssets},
         render_graph::{self, NodeRunError, RenderGraph, RenderGraphContext, RenderLabel},
         render_resource::{
-            Buffer, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Extent3d,
+            Buffer, BufferDescriptor, BufferUsages, Extent3d,
             Maintain, MapMode, TexelCopyBufferInfo, TexelCopyBufferLayout, TextureDimension,
             TextureFormat, TextureUsages,
         },
-        renderer::{RenderContext, RenderDevice, RenderQueue},
+        renderer::{RenderContext, RenderDevice},
     },
     winit::WinitPlugin,
 };
@@ -18,7 +18,7 @@ use crossbeam_channel::{Receiver, Sender};
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{Arc, atomic::{AtomicBool, Ordering}},
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -182,6 +182,7 @@ impl Plugin for RecordPlugin {
 
         render_app
             .insert_resource(RenderWorldSender(sender))
+            .init_resource::<ReadbackQueue>()
             .add_systems(ExtractSchedule, image_copy_extract)
             .add_systems(Render, copy_buffer_to_channel.after(RenderSet::Render));
     }
@@ -304,24 +305,50 @@ fn check_complete(mut state: ResMut<RecordState>, mut exit: EventWriter<AppExit>
 
 // ── RenderGraph: GPU texture → CPU buffer → channel ──────────────────────
 
+/// Profundidad del anillo de readback. Con N buffers la GPU puede ir hasta N-1 frames
+/// por delante de la CPU: mientras la CPU mapea/copia el frame f-2, la GPU ya renderizó
+/// f-1 y f. Sin esto, poll(wait) serializa GPU↔CPU y deja ~7 cores ociosos.
+const READBACK_RING: usize = 4;
+
 #[derive(Clone, Component)]
 struct ImageCopier {
-    buffer:    Buffer,
+    buffers:   Arc<Vec<Buffer>>,
     src_image: Handle<Image>,
+    frame:     Arc<std::sync::atomic::AtomicUsize>, // qué buffer del anillo toca este frame
     enabled:   Arc<AtomicBool>,
 }
 
 impl ImageCopier {
     fn new(src_image: Handle<Image>, size: Extent3d, device: &RenderDevice) -> Self {
         let padded = RenderDevice::align_copy_bytes_per_row(size.width as usize * 4);
-        let buffer = device.create_buffer(&BufferDescriptor {
-            label:              Some("record_readback"),
-            size:               (padded * size.height as usize) as u64,
-            usage:              BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        ImageCopier { buffer, src_image, enabled: Arc::new(AtomicBool::new(true)) }
+        let buffers = (0..READBACK_RING)
+            .map(|i| {
+                device.create_buffer(&BufferDescriptor {
+                    label:              Some(&format!("record_readback_{i}")),
+                    size:               (padded * size.height as usize) as u64,
+                    usage:              BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+        ImageCopier {
+            buffers: Arc::new(buffers),
+            src_image,
+            frame:   Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            enabled: Arc::new(AtomicBool::new(true)),
+        }
     }
+}
+
+/// Cola de buffers cuyo map_async se lanzó pero aún no se recogió (en el render world).
+#[derive(Resource, Default)]
+struct ReadbackQueue {
+    in_flight: std::collections::VecDeque<InFlight>,
+}
+
+struct InFlight {
+    idx: usize,
+    rx:  Receiver<bool>, // el callback de map_async manda ok/err aquí
 }
 
 #[derive(Clone, Default, Resource, Deref, DerefMut)]
@@ -355,14 +382,14 @@ impl render_graph::Node for ImageCopyDriver {
                 (src.size.width as usize / block_dim.0 as usize) * block_size as usize,
             );
 
-            let mut encoder = render_context
-                .render_device()
-                .create_command_encoder(&CommandEncoderDescriptor::default());
+            let k = copier.frame.load(Ordering::Relaxed) % READBACK_RING;
 
-            encoder.copy_texture_to_buffer(
+            // Funde el copy en el command encoder del frame: el render graph lo envía en
+            // el mismo submit que la cámara → un solo submit/frame en vez de dos.
+            render_context.command_encoder().copy_texture_to_buffer(
                 src.texture.as_image_copy(),
                 TexelCopyBufferInfo {
-                    buffer: &copier.buffer,
+                    buffer: &copier.buffers[k],
                     layout: TexelCopyBufferLayout {
                         offset:         0,
                         bytes_per_row:  Some(std::num::NonZero::new(padded as u32).unwrap().into()),
@@ -371,8 +398,6 @@ impl render_graph::Node for ImageCopyDriver {
                 },
                 src.size,
             );
-
-            world.resource::<RenderQueue>().submit(std::iter::once(encoder.finish()));
         }
 
         Ok(())
@@ -383,19 +408,57 @@ fn copy_buffer_to_channel(
     copiers:       Res<ImageCopiers>,
     render_device: Res<RenderDevice>,
     sender:        Res<RenderWorldSender>,
+    mut queue:     ResMut<ReadbackQueue>,
 ) {
     for copier in copiers.iter() {
         if !copier.enabled.load(Ordering::Relaxed) {
             continue;
         }
-        let buffer_slice = copier.buffer.slice(..);
-        let (s, r)       = crossbeam_channel::bounded(1);
-        buffer_slice.map_async(MapMode::Read, move |result| {
-            s.send(result.expect("buffer map failed")).ok();
+        let k = copier.frame.load(Ordering::Relaxed) % READBACK_RING;
+
+        // 1. Bombea callbacks de maps ya completados (no bloquea) y recoge en orden FIFO.
+        render_device.poll(Maintain::Poll);
+        drain_ready(&mut queue, copier, &sender);
+
+        // 2. Garantiza que buffers[k] esté libre antes de reusarlo. Si el anillo está
+        //    lleno, el frente ES buffers[k] (rotación estricta): lo drenamos bloqueando.
+        //    Solo ocurre si la GPU se quedó atrás; normalmente ya está recogido.
+        while queue.in_flight.len() >= READBACK_RING {
+            render_device.poll(Maintain::wait()).panic_on_timeout();
+            drain_one_blocking(&mut queue, copier, &sender);
+        }
+
+        // 3. Lanza el map del buffer que el node escribió este frame (asíncrono).
+        let (s, r) = crossbeam_channel::bounded(1);
+        copier.buffers[k].slice(..).map_async(MapMode::Read, move |res| {
+            let _ = s.send(res.is_ok());
         });
-        render_device.poll(Maintain::wait()).panic_on_timeout();
-        r.recv().expect("map_async recv failed");
-        let _ = sender.0.send(buffer_slice.get_mapped_range().to_vec());
-        copier.buffer.unmap();
+        queue.in_flight.push_back(InFlight { idx: k, rx: r });
+
+        copier.frame.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Recoge del frente todos los buffers cuyo map ya completó, sin bloquear.
+fn drain_ready(queue: &mut ReadbackQueue, copier: &ImageCopier, sender: &RenderWorldSender) {
+    while let Some(front) = queue.in_flight.front() {
+        match front.rx.try_recv() {
+            Ok(_) => {
+                let idx = front.idx;
+                let _ = sender.0.send(copier.buffers[idx].slice(..).get_mapped_range().to_vec());
+                copier.buffers[idx].unmap();
+                queue.in_flight.pop_front();
+            }
+            Err(_) => break, // el frente aún no está listo
+        }
+    }
+}
+
+/// Recoge exactamente el frente, asumiendo que su map ya completó (tras poll(wait)).
+fn drain_one_blocking(queue: &mut ReadbackQueue, copier: &ImageCopier, sender: &RenderWorldSender) {
+    if let Some(front) = queue.in_flight.pop_front() {
+        let _ = front.rx.recv();
+        let _ = sender.0.send(copier.buffers[front.idx].slice(..).get_mapped_range().to_vec());
+        copier.buffers[front.idx].unmap();
     }
 }
