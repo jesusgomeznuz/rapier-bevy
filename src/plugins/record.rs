@@ -1,5 +1,6 @@
 use bevy::{
     prelude::*,
+    time::TimeUpdateStrategy,
     render::{
         Extract, Render, RenderApp, RenderSet,
         render_asset::{RenderAssetUsages, RenderAssets},
@@ -25,7 +26,6 @@ use std::{
 const WIDTH:    u32 = 1080;
 const HEIGHT:   u32 = 1920;
 const FPS:      u32 = 60;
-const SPEED:    f32 = 50.0; // virtual time multiplier — sweet spot on M4
 
 /// Inserted by RecordPlugin before GraphicsPlugin runs,
 /// so the camera renders to this image instead of the window.
@@ -110,13 +110,15 @@ impl Plugin for RecordPlugin {
             )
             .add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(Duration::ZERO));
 
-        // Advance virtual time faster than wall time → physics runs at SPEED×
-        app.world_mut()
-            .resource_mut::<Time<Virtual>>()
-            .set_relative_speed(SPEED);
+        // Cada frame de la app avanza un step fijo de física (1/60 s) → exactamente
+        // 1 frame de video por step. La aceleración de producción viene del loop
+        // headless (run_loop ZERO) corriendo a cientos de fps, no de saltarse steps:
+        // así 60 s de video = 3600 frames = 3600 steps = 60 s de simulación.
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs_f64(1.0 / FPS as f64),
+        ));
 
         app
-            .insert_resource(Time::<Fixed>::from_hz(FPS as f64))
             .insert_resource(MainWorldReceiver(receiver))
             .insert_resource(AssetsLoading::default())
             .insert_resource(RecordState {

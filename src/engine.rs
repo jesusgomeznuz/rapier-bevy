@@ -30,7 +30,13 @@ pub fn game_app(mode: SimMode, config: GameAppConfig) -> App {
         }
     }
 
-    app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default());
+    // Toda la simulación corre en FixedUpdate a 60 steps/s. Ese es el reloj de verdad
+    // del juego; el modificador --record acelera el wall-clock (Time<Virtual> a SPEED×)
+    // para generar simulaciones largas rápido, sin alterar la duración lógica de nada.
+    // El TimestepMode va antes del plugin para que su init_resource respete el Fixed.
+    app.insert_resource(TimestepMode::Fixed { dt: 1.0 / 60.0, substeps: 1 });
+    app.insert_resource(Time::<Fixed>::from_hz(60.0));
+    app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_fixed_schedule());
 
     if debug_enabled() {
         app.add_plugins(RapierDebugRenderPlugin::default());
