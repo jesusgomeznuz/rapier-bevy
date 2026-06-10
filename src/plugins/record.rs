@@ -52,7 +52,7 @@ struct RecordState {
     frames_captured: u32,
     total_frames:    u32,
     frames_to_skip:  u32,
-    capture_pending: bool,
+    capture_active:  bool,
     finalized:       bool,
     output_path:     PathBuf,
     frame_tx:        Option<Sender<Vec<u8>>>, // frames I420 → dispatcher (segmenta y reparte a N encoders)
@@ -146,7 +146,7 @@ impl Plugin for RecordPlugin {
                 frames_captured: 0,
                 total_frames,
                 frames_to_skip:  3,
-                capture_pending: false,
+                capture_active:  false,
                 finalized: false,
                 output_path,
                 frame_tx,
@@ -220,11 +220,8 @@ fn mark_capture(
     asset_server: Res<AssetServer>,
 ) {
     let all_ready = loading.0.iter().all(|h| asset_server.is_loaded_with_dependencies(h));
-    if !all_ready {
-        return;
-    }
-    if state.frames_captured < state.total_frames {
-        state.capture_pending = true;
+    if all_ready {
+        state.capture_active = true;
     }
 }
 
@@ -233,41 +230,41 @@ fn receive_and_pipe(receiver: Res<MainWorldReceiver>, mut state: ResMut<RecordSt
         return;
     }
 
-    if !state.capture_pending {
-        while receiver.0.try_recv().is_ok() {} // drain to avoid backlog
+    if !state.capture_active {
+        while receiver.0.try_recv().is_ok() {} // descarta lo renderizado antes de que carguen los assets
         return;
     }
 
-    // Drain channel — keep only the last (most recent physics state)
-    let mut last: Option<Vec<u8>> = None;
-    while let Ok(data) = receiver.0.try_recv() {
-        last = Some(data);
-    }
+    // Cada frame del channel es un step de física distinto: se encolan TODOS en orden.
+    // El readback asíncrono (anillo de 4) los entrega en ráfagas; quedarse solo con el
+    // último descartaba steps enteros y comprimía el tiempo del video vs el simulado
+    // (60 s de video cubrían ~63 s de simulación → desfase creciente con voice_tracker).
+    while let Ok(raw) = receiver.0.try_recv() {
+        if state.frames_captured >= state.total_frames {
+            return; // los frames en vuelo que sobran tras el último se descartan
+        }
 
-    let Some(raw) = last else { return };
+        if state.frames_to_skip > 0 {
+            state.frames_to_skip -= 1;
+            continue;
+        }
 
-    if state.frames_to_skip > 0 {
-        state.frames_to_skip -= 1;
-        state.capture_pending = false;
-        return;
-    }
+        if state.t_first.is_none() {
+            state.t_first = Some(Instant::now());
+        }
 
-    if state.t_first.is_none() {
-        state.t_first = Some(Instant::now());
-    }
+        // Entrega el frame crudo al hilo escritor; el encode ocurre fuera del loop de
+        // render. send() solo bloquea si el encode se atrasa (backpressure).
+        if let Some(ref tx) = state.frame_tx {
+            let _ = tx.send(raw);
+        }
 
-    // Entrega el frame crudo (padded) al hilo escritor; el strip + write a ffmpeg
-    // ocurre fuera del loop de render. send() solo bloquea si el encode se atrasa (backpressure).
-    if let Some(ref tx) = state.frame_tx {
-        let _ = tx.send(raw);
-    }
+        state.frames_captured += 1;
 
-    state.capture_pending   = false;
-    state.frames_captured  += 1;
-
-    if state.frames_captured % 60 == 0 {
-        let pct = state.frames_captured * 100 / state.total_frames;
-        println!("[record] {}/{} frames ({}%)", state.frames_captured, state.total_frames, pct);
+        if state.frames_captured % 60 == 0 {
+            let pct = state.frames_captured * 100 / state.total_frames;
+            println!("[record] {}/{} frames ({}%)", state.frames_captured, state.total_frames, pct);
+        }
     }
 }
 
