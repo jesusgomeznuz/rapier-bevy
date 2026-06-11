@@ -17,13 +17,13 @@ pub struct Pose {
 }
 
 /// Simulación horneada: la pose de cada cuerpo en cada frame, a 60 fps.
-/// `frames[f][b]` = pose del cuerpo `b` en el frame `f`. El orden de los cuerpos
-/// es por Entity ascendente — estable mientras bake y replay spawneen el mismo
-/// mundo en el mismo orden (mismo setup, distinto flag del mismo binario).
+/// Los cuerpos se identifican por [`BakeKey`] — bake y replay deben asignar las
+/// mismas keys (mismo setup, distinto flag del mismo binario).
 #[derive(Serialize, Deserialize)]
 pub struct Timeline {
     pub fps: u32,
-    pub frames: Vec<Vec<Pose>>,
+    /// `frames[f]` = (BakeKey, Pose) de cada cuerpo en el frame `f`, orden por key.
+    pub frames: Vec<Vec<(u64, Pose)>>,
     /// Eventos opacos del juego por frame, en orden. El engine no interpreta el
     /// payload: el juego los empuja en bake (BakeEvents) y los recibe en replay
     /// (ReplayEvent) para reproducir lo que las poses no capturan — visuales y
@@ -41,6 +41,14 @@ pub struct BakeEvents(pub Vec<String>);
 #[derive(Event)]
 pub struct ReplayEvent(pub String);
 
+/// Identidad estable de un cuerpo en la timeline, asignada por el juego de forma
+/// determinista. Sin ella el mapeo cae al índice de Entity — que Bevy REUTILIZA
+/// tras un despawn: si bake y replay despawnean entidades distintas (la utilería
+/// visual solo existe en uno de los dos), el orden por Entity diverge y los
+/// cuerpos intercambian poses en silencio. Con BakeKey el mapeo es por identidad.
+#[derive(Component)]
+pub struct BakeKey(pub u64);
+
 // ── Bake: correr solo la física y grabar la timeline ─────────────────────
 
 pub struct BakePlugin {
@@ -50,7 +58,7 @@ pub struct BakePlugin {
 #[derive(Resource)]
 struct BakeState {
     total_frames: u32,
-    frames: Vec<Vec<Pose>>,
+    frames: Vec<Vec<(u64, Pose)>>,
     events: Vec<(u32, String)>,
     output: PathBuf,
     t_start: Instant,
@@ -81,25 +89,37 @@ impl Plugin for BakePlugin {
 
 fn capture_frame(
     mut state: ResMut<BakeState>,
-    bodies: Query<(Entity, &Transform), With<RigidBody>>,
+    bodies: Query<(Entity, Option<&BakeKey>, &Transform), With<RigidBody>>,
 ) {
     if state.frames.len() as u32 >= state.total_frames {
         return;
     }
 
-    let mut rows: Vec<(Entity, Pose)> = bodies
+    let mut rows: Vec<(u64, Pose)> = bodies
         .iter()
-        .map(|(entity, t)| {
-            (entity, Pose {
-                pos: t.translation.to_array(),
-                rot: t.rotation.to_array(),
-                scale: t.scale.to_array(),
-            })
+        .map(|(entity, key, t)| {
+            (
+                // Sin BakeKey cae al índice de Entity — válido solo en mundos sin
+                // despawns (la demo); con despawns el juego DEBE asignar keys.
+                key.map(|k| k.0).unwrap_or(u64::from(entity.index())),
+                Pose {
+                    pos: t.translation.to_array(),
+                    rot: t.rotation.to_array(),
+                    scale: t.scale.to_array(),
+                },
+            )
         })
         .collect();
-    rows.sort_by_key(|(entity, _)| *entity);
+    rows.sort_by_key(|(key, _)| *key);
+    for pair in rows.windows(2) {
+        assert_ne!(
+            pair[0].0, pair[1].0,
+            "[bake] BakeKey duplicada ({}) — el mapeo de poses sería ambiguo",
+            pair[0].0,
+        );
+    }
 
-    state.frames.push(rows.into_iter().map(|(_, pose)| pose).collect());
+    state.frames.push(rows);
 }
 
 fn drain_frame_events(mut pending: ResMut<BakeEvents>, mut state: ResMut<BakeState>) {
@@ -185,7 +205,7 @@ impl Plugin for ReplayPlugin {
 
 fn apply_replay_frame(
     mut state: ResMut<ReplayState>,
-    mut bodies: Query<(Entity, &mut Transform), With<RigidBody>>,
+    mut bodies: Query<(Entity, Option<&BakeKey>, &mut Transform), With<RigidBody>>,
     mut events: EventWriter<ReplayEvent>,
 ) {
     let cursor = state.cursor;
@@ -205,7 +225,12 @@ fn apply_replay_frame(
     }
     let frame = &state.timeline.frames[cursor];
 
-    let mut rows: Vec<(Entity, Mut<Transform>)> = bodies.iter_mut().collect();
+    let mut rows: Vec<(u64, Mut<Transform>)> = bodies
+        .iter_mut()
+        .map(|(entity, key, transform)| {
+            (key.map(|k| k.0).unwrap_or(u64::from(entity.index())), transform)
+        })
+        .collect();
     assert_eq!(
         rows.len(),
         frame.len(),
@@ -213,9 +238,14 @@ fn apply_replay_frame(
         rows.len(),
         frame.len(),
     );
-    rows.sort_by_key(|(entity, _)| *entity);
+    rows.sort_by_key(|(key, _)| *key);
 
-    for ((_, transform), pose) in rows.iter_mut().zip(frame) {
+    for ((world_key, transform), (baked_key, pose)) in rows.iter_mut().zip(frame) {
+        assert_eq!(
+            world_key, baked_key,
+            "[replay] el mundo tiene el cuerpo {world_key} donde la timeline trae {baked_key} — \
+             bake y replay asignaron BakeKeys distintas",
+        );
         transform.translation = Vec3::from_array(pose.pos);
         transform.rotation = Quat::from_array(pose.rot);
         transform.scale = Vec3::from_array(pose.scale);

@@ -9,7 +9,7 @@ pub use modes::{
     record_duration, replay_path,
 };
 pub use plugins::{
-    BakeEvents, BakePlugin, PhysicsStatsPlugin, RecordPlugin, ReplayEvent, ReplayPlugin, Timeline,
+    BakeEvents, BakeKey, BakePlugin, PhysicsStatsPlugin, RecordPlugin, ReplayEvent, ReplayPlugin, Timeline,
     run_bench_mode,
 };
 pub use plugins::record::{AssetsLoading, OffscreenTarget};

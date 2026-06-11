@@ -79,6 +79,7 @@ fn add_headless_plugins(app: &mut App) {
         .init_asset::<Mesh>()
         .init_asset::<StandardMaterial>()
         .init_asset::<bevy::sprite::ColorMaterial>()
+        .init_asset::<bevy::text::Font>()
         .init_asset::<Image>()
         .init_asset::<bevy::scene::Scene>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
