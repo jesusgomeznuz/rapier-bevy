@@ -6,11 +6,14 @@ use std::time::Instant;
 
 const FPS: u32 = 60;
 
-/// Pose de un cuerpo en un frame: posición + rotación (quaternion xyzw).
+/// Pose de un cuerpo en un frame: posición + rotación (quaternion xyzw) + escala.
+/// La escala viaja porque hay gameplay que la muta (ej. el shrink de canicas);
+/// sin ella el replay renderiza el cuerpo a tamaño completo.
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct Pose {
     pub pos: [f32; 3],
     pub rot: [f32; 4],
+    pub scale: [f32; 3],
 }
 
 /// Simulación horneada: la pose de cada cuerpo en cada frame, a 60 fps.
@@ -66,7 +69,11 @@ fn capture_frame(
     let mut rows: Vec<(Entity, Pose)> = bodies
         .iter()
         .map(|(entity, t)| {
-            (entity, Pose { pos: t.translation.to_array(), rot: t.rotation.to_array() })
+            (entity, Pose {
+                pos: t.translation.to_array(),
+                rot: t.rotation.to_array(),
+                scale: t.scale.to_array(),
+            })
         })
         .collect();
     rows.sort_by_key(|(entity, _)| *entity);
@@ -160,5 +167,6 @@ fn apply_replay_frame(
     for ((_, transform), pose) in rows.iter_mut().zip(frame) {
         transform.translation = Vec3::from_array(pose.pos);
         transform.rotation = Quat::from_array(pose.rot);
+        transform.scale = Vec3::from_array(pose.scale);
     }
 }

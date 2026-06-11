@@ -73,6 +73,7 @@ fn add_physics(app: &mut App) {
 // render nadie los consume, pero los Assets<T> deben existir para que el setup corra.
 fn add_headless_plugins(app: &mut App) {
     app.add_plugins(MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(Duration::ZERO)))
+        .add_plugins(bevy::log::LogPlugin::default())
         .add_plugins(TransformPlugin)
         .add_plugins(AssetPlugin::default())
         .init_asset::<Mesh>()
