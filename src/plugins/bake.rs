@@ -126,8 +126,13 @@ impl Plugin for ReplayPlugin {
             timeline.frames.first().map(Vec::len).unwrap_or(0),
         );
 
+        // El replay ES el writeback: ocupa PhysicsSet::Writeback para que los sistemas
+        // del juego ordenados con .after(Writeback) — p.ej. generación progresiva de
+        // nivel — vean las poses de ESTE frame, igual que con física real. Sin esto
+        // corren con poses del frame anterior y el mundo diverge del bake (spawns
+        // desfasados → mismatch de cuerpos contra la timeline).
         app.insert_resource(ReplayState { timeline, cursor: 0 })
-            .add_systems(FixedUpdate, apply_replay_frame);
+            .add_systems(FixedUpdate, apply_replay_frame.in_set(PhysicsSet::Writeback));
     }
 }
 
