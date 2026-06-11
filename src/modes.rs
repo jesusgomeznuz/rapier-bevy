@@ -50,6 +50,20 @@ pub fn record_duration() -> Option<u32> {
     Some(secs)
 }
 
+pub fn bake_duration() -> Option<u32> {
+    let args: Vec<String> = std::env::args().collect();
+    let pos  = args.iter().position(|a| a == "--bake")?;
+    let secs = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(60u32);
+    Some(secs)
+}
+
+pub fn replay_path() -> Option<std::path::PathBuf> {
+    let args: Vec<String> = std::env::args().collect();
+    let pos  = args.iter().position(|a| a == "--replay")?;
+    let path = args.get(pos + 1).expect("--replay requiere la ruta de la timeline (ej. outputs/bake_60s.timeline)");
+    Some(std::path::PathBuf::from(path))
+}
+
 pub fn parse_engine_mode(args: &[String]) -> EngineMode {
     if args.iter().any(|a| a == "--preprocess") {
         return EngineMode::Preprocess;

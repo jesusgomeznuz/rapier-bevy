@@ -3695,6 +3695,7 @@ dependencies = [
  "bevy_rapier3d",
  "bincode",
  "crossbeam-channel",
+ "serde",
  "tobj",
 ]
 

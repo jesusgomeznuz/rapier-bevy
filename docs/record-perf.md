@@ -197,10 +197,18 @@ tiempo). Dos intentos, ambos descartados; **el proyecto se queda en 60fps fijo.*
 del código. Para un 30fps usable en el futuro haría falta un motion blur mejor que el de Bevy (o un
 post-proceso externo), NO tocar fps/Hz.
 
-## Idea futura (ALTO ROI): desacoplar sim para "casting" de resultados
+## Desacoplar sim para "casting" de resultados — MVP IMPLEMENTADO (2026-06-11)
 
-> Pendiente, no implementado. Idea de Jesús (2026-06-06). Probablemente la optimización de mayor
-> impacto real para producción de contenido, muy por encima de cualquier cosa del pipeline de render.
+> Idea de Jesús (2026-06-06). El MVP bake/replay está en master (`plugins/bake.rs`). Falta el
+> loop de búsqueda + criterio de victoria (vive en canicasbrawl-rapier, no en el engine).
+>
+> **Uso:** `--bake 60` corre SOLO la física (MinimalPlugins, sin GPU) → `outputs/bake_60s.timeline`
+> (bincode: pose de cada RigidBody por frame, orden estable por Entity). Medido en el demo:
+> **10s de sim en 0.15s → 65x realtime** (vs ~9x del record). Luego `--record 60 --replay <file>`
+> renderiza desde la timeline sin Rapier (un sistema setea Transforms por frame), o `--replay`
+> solo para preview en ventana. Validado: video del replay = video de física en vivo (YAVG
+> idéntico en t=2/5/8). Constraint: bake y replay deben spawnear el mismo mundo en el mismo
+> orden (mismo setup, distinto flag del mismo binario).
 
 **El problema de producción:** para un video de canicas querés un resultado específico (ej. que
 gane el personaje X). Hoy eso implica renderizar corridas hasta que salga la deseada → caro
