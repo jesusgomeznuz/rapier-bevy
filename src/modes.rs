@@ -65,7 +65,7 @@ pub fn write_timeline_duration() -> Option<u32> {
     Some(secs)
 }
 
-pub fn play_timeline() -> Option<std::path::PathBuf> {
+pub fn timeline_path() -> Option<std::path::PathBuf> {
     let args: Vec<String> = std::env::args().collect();
     reject_renamed_flag(&args, "--replay", "--play");
     let pos = args.iter().position(|a| a == "--play")?;

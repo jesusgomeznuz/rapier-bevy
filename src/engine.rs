@@ -5,7 +5,7 @@ use bevy_rapier3d::prelude::*;
 use bevy_rapier3d::render::RapierDebugRenderPlugin;
 use std::time::Duration;
 
-use crate::modes::{SimulationMode, debug_enabled, play_timeline, record_duration, write_timeline_duration};
+use crate::modes::{SimulationMode, debug_enabled, record_duration, timeline_path, write_timeline_duration};
 use crate::plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, WriteTimelinePlugin};
 
 pub struct GameAppConfig {
@@ -37,7 +37,7 @@ pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> A
     // generar simulaciones largas rápido, sin alterar la duración lógica de nada.
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
 
-    match (writing_timeline, play_timeline()) {
+    match (writing_timeline, timeline_path()) {
         // Escribir timeline: física + captura; gana sobre --record/--play.
         (Some(secs), _) => {
             add_physics(&mut app);
