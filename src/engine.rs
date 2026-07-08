@@ -6,7 +6,7 @@ use bevy_rapier3d::render::RapierDebugRenderPlugin;
 use std::time::Duration;
 
 use crate::modes::{SimulationMode, debug_enabled, play_path, record_duration, simulate_duration};
-use crate::plugins::{BakePlugin, PhysicsStatsPlugin, RecordPlugin, ReplayPlugin};
+use crate::plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, SimulatePlugin};
 
 pub struct GameAppConfig {
     pub title: &'static str,
@@ -33,20 +33,20 @@ pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> A
     }
 
     // Toda la simulación corre en FixedUpdate a 60 steps/s. Ese es el reloj de verdad
-    // del juego; los modificadores --record y --bake aceleran el wall-clock para
+    // del juego; los modificadores --record y --simulate aceleran el wall-clock para
     // generar simulaciones largas rápido, sin alterar la duración lógica de nada.
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
 
     match (simulating, play_path()) {
-        // Bake: física + captura de timeline; gana sobre --record/--replay.
+        // Simulate: física + captura de timeline; gana sobre --record/--play.
         (Some(secs), _) => {
             add_physics(&mut app);
-            app.add_plugins(BakePlugin { duration_secs: secs });
+            app.add_plugins(SimulatePlugin { duration_secs: secs });
         }
-        // Replay: SIN física — la timeline horneada dicta los Transforms y Bevy
-        // solo dibuja. Combina con --record (video) o con ventana (preview).
+        // Play: SIN física — la timeline dicta los Transforms y Bevy solo dibuja.
+        // Combina con --record (video) o con ventana (preview).
         (None, Some(path)) => {
-            app.add_plugins(ReplayPlugin { path });
+            app.add_plugins(PlayPlugin { path });
         }
         (None, None) => {
             add_physics(&mut app);
@@ -78,7 +78,7 @@ fn add_physics(app: &mut App) {
     app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_fixed_schedule());
 }
 
-// Bake: sin ventana, sin GPU, sin render. El loop corre tan rápido como puede y
+// Simulate: sin ventana, sin GPU, sin render. El loop corre tan rápido como puede y
 // ManualDuration avanza el reloj exactamente 1/60 por update → cada update = 1 step
 // de física = 1 frame de la timeline (mismo timing determinista que --record).
 // Los init_asset cubren lo que spawn_object toca (meshes/materiales/escenas); sin

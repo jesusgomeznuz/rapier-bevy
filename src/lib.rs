@@ -9,8 +9,8 @@ pub use modes::{
     BenchScene, EngineMode, SimulationMode, debug_enabled, parse_engine_mode, physics_enabled,
     play_path, record_duration, simulate_duration,
 };
-pub use plugins::{BakePlugin, PhysicsStatsPlugin, RecordPlugin, ReplayPlugin, run_bench_mode};
-pub use timeline::{BakeEvents, BakeKey, Pose, ReplayEvent, Timeline};
+pub use plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, SimulatePlugin, run_bench_mode};
+pub use timeline::{PlayEvent, Pose, Timeline, TimelineEvents, TimelineKey};
 pub use plugins::record::{AssetsLoading, OffscreenTarget};
 pub use bevy_rapier3d::prelude::{LockedAxes, VHACDParameters};
 pub use world_objects::{

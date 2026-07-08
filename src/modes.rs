@@ -55,8 +55,8 @@ pub fn record_duration() -> Option<u32> {
 
 pub fn simulate_duration() -> Option<u32> {
     let args: Vec<String> = std::env::args().collect();
-    // --bake es el alias histórico; scripts viejos siguen funcionando
-    let pos = args.iter().position(|a| a == "--simulate" || a == "--bake")?;
+    reject_renamed_flag(&args, "--bake", "--simulate");
+    let pos = args.iter().position(|a| a == "--simulate")?;
     let secs = args
         .get(pos + 1)
         .and_then(|s| s.parse().ok())
@@ -66,8 +66,8 @@ pub fn simulate_duration() -> Option<u32> {
 
 pub fn play_path() -> Option<std::path::PathBuf> {
     let args: Vec<String> = std::env::args().collect();
-    // --replay es el alias histórico; scripts viejos siguen funcionando
-    let pos = args.iter().position(|a| a == "--play" || a == "--replay")?;
+    reject_renamed_flag(&args, "--replay", "--play");
+    let pos = args.iter().position(|a| a == "--play")?;
     let path = args
         .get(pos + 1)
         .expect("--play requiere la ruta de la timeline (ej. outputs/simulation_60s.timeline)");
@@ -105,4 +105,11 @@ pub fn parse_engine_mode(args: &[String]) -> EngineMode {
         return EngineMode::Sim(SimulationMode::Bench { scene, count });
     }
     EngineMode::Sim(SimulationMode::Precomputed)
+}
+
+fn reject_renamed_flag(args: &[String], old: &str, new: &str) {
+    if args.iter().any(|a| a == old) {
+        eprintln!("{old} fue renombrado: usa {new}");
+        std::process::exit(1);
+    }
 }
