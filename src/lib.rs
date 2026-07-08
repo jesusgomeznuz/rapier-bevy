@@ -7,7 +7,7 @@ pub mod world_objects;
 pub use engine::{GameAppConfig, deterministic_physics_game_app, random_physics_game_app};
 pub use modes::{
     BenchScene, EngineMode, SimulationMode, bake_duration, debug_enabled, parse_engine_mode,
-    record_duration, replay_path,
+    physics_enabled, record_duration, replay_path,
 };
 pub use plugins::{BakePlugin, PhysicsStatsPlugin, RecordPlugin, ReplayPlugin, run_bench_mode};
 pub use timeline::{BakeEvents, BakeKey, Pose, ReplayEvent, Timeline};

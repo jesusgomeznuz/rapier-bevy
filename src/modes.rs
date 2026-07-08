@@ -72,6 +72,13 @@ pub fn replay_path() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(path))
 }
 
+/// La misma regla con la que el engine arma el mundo: hay física salvo que se
+/// esté actuando una partitura. El juego la consulta para decidir si escucha
+/// colisiones reales.
+pub fn physics_enabled() -> bool {
+    replay_path().is_none()
+}
+
 pub fn parse_engine_mode(args: &[String]) -> EngineMode {
     if args.iter().any(|a| a == "--preprocess") {
         return EngineMode::Preprocess;
