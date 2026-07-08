@@ -5,7 +5,7 @@ use bevy_rapier3d::prelude::*;
 use bevy_rapier3d::render::RapierDebugRenderPlugin;
 use std::time::Duration;
 
-use crate::modes::{SimulationMode, bake_duration, debug_enabled, record_duration, replay_path};
+use crate::modes::{SimulationMode, debug_enabled, play_path, record_duration, simulate_duration};
 use crate::plugins::{BakePlugin, PhysicsStatsPlugin, RecordPlugin, ReplayPlugin};
 
 pub struct GameAppConfig {
@@ -25,8 +25,8 @@ impl Default for GameAppConfig {
 pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> App {
     let mut app = App::new();
 
-    let baking = bake_duration();
-    match (baking, record_duration()) {
+    let simulating = simulate_duration();
+    match (simulating, record_duration()) {
         (Some(_), _)       => add_headless_plugins(&mut app),
         (None, Some(secs)) => { app.add_plugins(RecordPlugin { duration_secs: secs }); }
         (None, None)       => add_windowed_plugins(&mut app, &config),
@@ -37,7 +37,7 @@ pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> A
     // generar simulaciones largas rápido, sin alterar la duración lógica de nada.
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
 
-    match (baking, replay_path()) {
+    match (simulating, play_path()) {
         // Bake: física + captura de timeline; gana sobre --record/--replay.
         (Some(secs), _) => {
             add_physics(&mut app);

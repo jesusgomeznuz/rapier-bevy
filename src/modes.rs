@@ -53,9 +53,10 @@ pub fn record_duration() -> Option<u32> {
     Some(secs)
 }
 
-pub fn bake_duration() -> Option<u32> {
+pub fn simulate_duration() -> Option<u32> {
     let args: Vec<String> = std::env::args().collect();
-    let pos = args.iter().position(|a| a == "--bake")?;
+    // --bake es el alias histórico; scripts viejos siguen funcionando
+    let pos = args.iter().position(|a| a == "--simulate" || a == "--bake")?;
     let secs = args
         .get(pos + 1)
         .and_then(|s| s.parse().ok())
@@ -63,12 +64,13 @@ pub fn bake_duration() -> Option<u32> {
     Some(secs)
 }
 
-pub fn replay_path() -> Option<std::path::PathBuf> {
+pub fn play_path() -> Option<std::path::PathBuf> {
     let args: Vec<String> = std::env::args().collect();
-    let pos = args.iter().position(|a| a == "--replay")?;
+    // --replay es el alias histórico; scripts viejos siguen funcionando
+    let pos = args.iter().position(|a| a == "--play" || a == "--replay")?;
     let path = args
         .get(pos + 1)
-        .expect("--replay requiere la ruta de la timeline (ej. outputs/bake_60s.timeline)");
+        .expect("--play requiere la ruta de la timeline (ej. outputs/simulation_60s.timeline)");
     Some(std::path::PathBuf::from(path))
 }
 
@@ -76,7 +78,7 @@ pub fn replay_path() -> Option<std::path::PathBuf> {
 /// esté actuando una partitura. El juego la consulta para decidir si escucha
 /// colisiones reales.
 pub fn physics_enabled() -> bool {
-    replay_path().is_none()
+    play_path().is_none()
 }
 
 pub fn parse_engine_mode(args: &[String]) -> EngineMode {

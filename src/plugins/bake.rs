@@ -31,7 +31,7 @@ impl Plugin for BakePlugin {
             total_frames,
             frames: Vec::with_capacity(total_frames as usize),
             events: Vec::new(),
-            output: PathBuf::from("outputs").join(format!("bake_{}s.timeline", self.duration_secs)),
+            output: PathBuf::from("outputs").join(format!("simulation_{}s.timeline", self.duration_secs)),
             t_start: Instant::now(),
         })
         .init_resource::<BakeEvents>()
@@ -72,7 +72,7 @@ fn capture_frame(
     for pair in rows.windows(2) {
         assert_ne!(
             pair[0].0, pair[1].0,
-            "[bake] BakeKey duplicada ({}) — el mapeo de poses sería ambiguo",
+            "[simulate] BakeKey duplicada ({}) — el mapeo de poses sería ambiguo",
             pair[0].0,
         );
     }
@@ -103,19 +103,19 @@ fn check_bake_complete(mut state: ResMut<BakeState>, mut exit: EventWriter<AppEx
         frames: std::mem::take(&mut state.frames),
         events: std::mem::take(&mut state.events),
     };
-    let data = bincode::serialize(&timeline).expect("[bake] failed to serialize timeline");
+    let data = bincode::serialize(&timeline).expect("[simulate] failed to serialize timeline");
     std::fs::write(&state.output, &data)
-        .unwrap_or_else(|_| panic!("[bake] failed to write {}", state.output.display()));
+        .unwrap_or_else(|_| panic!("[simulate] failed to write {}", state.output.display()));
 
     let secs = state.t_start.elapsed().as_secs_f64();
     let sim_secs = state.total_frames as f64 / FPS as f64;
     let bodies = timeline.frames.first().map(Vec::len).unwrap_or(0);
     println!(
-        "[bake] {} frames ({}s de sim) en {:.2}s → {:.0}x realtime",
+        "[simulate] {} frames ({}s de sim) en {:.2}s → {:.0}x realtime",
         state.total_frames, sim_secs, secs, sim_secs / secs,
     );
     println!(
-        "[bake] {} ready ({:.1} MB, {} cuerpos)",
+        "[simulate] {} ready ({:.1} MB, {} cuerpos)",
         state.output.display(), data.len() as f64 / 1e6, bodies,
     );
 
@@ -138,12 +138,12 @@ struct ReplayState {
 impl Plugin for ReplayPlugin {
     fn build(&self, app: &mut App) {
         let data = std::fs::read(&self.path)
-            .unwrap_or_else(|_| panic!("[replay] cannot read {}", self.path.display()));
+            .unwrap_or_else(|_| panic!("[play] cannot read {}", self.path.display()));
         let timeline: Timeline =
-            bincode::deserialize(&data).expect("[replay] failed to deserialize timeline");
+            bincode::deserialize(&data).expect("[play] failed to deserialize timeline");
 
         println!(
-            "[replay] {} — {} frames ({}s), {} cuerpos",
+            "[play] {} — {} frames ({}s), {} cuerpos",
             self.path.display(),
             timeline.frames.len(),
             timeline.frames.len() as u32 / timeline.fps.max(1),
@@ -192,7 +192,7 @@ fn apply_replay_frame(
     assert_eq!(
         rows.len(),
         frame.len(),
-        "[replay] el mundo tiene {} cuerpos pero la timeline {} — bake y replay deben spawnear el mismo mundo",
+        "[play] el mundo tiene {} cuerpos pero la timeline {} — bake y replay deben spawnear el mismo mundo",
         rows.len(),
         frame.len(),
     );
@@ -201,7 +201,7 @@ fn apply_replay_frame(
     for ((world_key, transform), (baked_key, pose)) in rows.iter_mut().zip(frame) {
         assert_eq!(
             world_key, baked_key,
-            "[replay] el mundo tiene el cuerpo {world_key} donde la timeline trae {baked_key} — \
+            "[play] el mundo tiene el cuerpo {world_key} donde la timeline trae {baked_key} — \
              bake y replay asignaron BakeKeys distintas",
         );
         transform.translation = Vec3::from_array(pose.pos);
