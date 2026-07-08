@@ -76,9 +76,9 @@ pub fn play_path() -> Option<std::path::PathBuf> {
 }
 
 /// La misma regla con la que el engine arma el mundo: hay física salvo que se
-/// esté actuando una partitura. El juego la consulta para decidir si escucha
-/// colisiones reales.
-pub fn physics_enabled() -> bool {
+/// esté reproduciendo una timeline. El juego la consulta para decidir si
+/// escucha colisiones reales.
+pub fn no_timeline_is_playing() -> bool {
     play_path().is_none()
 }
 
