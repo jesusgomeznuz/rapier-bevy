@@ -65,7 +65,7 @@ pub fn write_timeline_duration() -> Option<u32> {
     Some(secs)
 }
 
-pub fn play_path() -> Option<std::path::PathBuf> {
+pub fn play_timeline() -> Option<std::path::PathBuf> {
     let args: Vec<String> = std::env::args().collect();
     reject_renamed_flag(&args, "--replay", "--play");
     let pos = args.iter().position(|a| a == "--play")?;
@@ -73,13 +73,6 @@ pub fn play_path() -> Option<std::path::PathBuf> {
         .get(pos + 1)
         .expect("--play requiere la ruta de la timeline (ej. outputs/simulation_60s.timeline)");
     Some(std::path::PathBuf::from(path))
-}
-
-/// La misma regla con la que el engine arma el mundo: hay física salvo que se
-/// esté reproduciendo una timeline. El juego la consulta para decidir si
-/// escucha colisiones reales.
-pub fn no_timeline_is_playing() -> bool {
-    play_path().is_none()
 }
 
 pub fn parse_engine_mode(args: &[String]) -> EngineMode {
