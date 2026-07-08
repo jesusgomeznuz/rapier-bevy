@@ -7,12 +7,12 @@ use crate::timeline::{Pose, Timeline, TimelineEvents, TimelineKey};
 
 const FPS: u32 = 60;
 
-pub struct SimulatePlugin {
+pub struct WriteTimelinePlugin {
     pub duration_secs: u32,
 }
 
 #[derive(Resource)]
-struct SimulateState {
+struct WriteTimelineState {
     total_frames: u32,
     frames: Vec<Vec<(u64, Pose)>>,
     events: Vec<(u32, String)>,
@@ -20,12 +20,12 @@ struct SimulateState {
     t_start: Instant,
 }
 
-impl Plugin for SimulatePlugin {
+impl Plugin for WriteTimelinePlugin {
     fn build(&self, app: &mut App) {
         let total_frames = FPS * self.duration_secs;
         std::fs::create_dir_all("outputs").expect("cannot create outputs/");
 
-        app.insert_resource(SimulateState {
+        app.insert_resource(WriteTimelineState {
             total_frames,
             frames: Vec::with_capacity(total_frames as usize),
             events: Vec::new(),
@@ -40,12 +40,12 @@ impl Plugin for SimulatePlugin {
         // En FixedPostUpdate todos los sistemas del juego del tick ya empujaron:
         // lo pendiente pertenece al frame recién capturado.
         .add_systems(bevy::app::FixedPostUpdate, drain_frame_events)
-        .add_systems(Update, check_simulation_complete);
+        .add_systems(Update, check_timeline_complete);
     }
 }
 
 fn capture_frame(
-    mut state: ResMut<SimulateState>,
+    mut state: ResMut<WriteTimelineState>,
     bodies: Query<(Entity, Option<&TimelineKey>, &Transform), With<RigidBody>>,
 ) {
     if state.frames.len() as u32 >= state.total_frames {
@@ -71,7 +71,7 @@ fn capture_frame(
     for pair in rows.windows(2) {
         assert_ne!(
             pair[0].0, pair[1].0,
-            "[simulate] TimelineKey duplicada ({}) — el mapeo de poses sería ambiguo",
+            "[write-timeline] TimelineKey duplicada ({}) — el mapeo de poses sería ambiguo",
             pair[0].0,
         );
     }
@@ -79,7 +79,7 @@ fn capture_frame(
     state.frames.push(rows);
 }
 
-fn drain_frame_events(mut pending: ResMut<TimelineEvents>, mut state: ResMut<SimulateState>) {
+fn drain_frame_events(mut pending: ResMut<TimelineEvents>, mut state: ResMut<WriteTimelineState>) {
     if pending.0.is_empty() {
         return;
     }
@@ -92,7 +92,7 @@ fn drain_frame_events(mut pending: ResMut<TimelineEvents>, mut state: ResMut<Sim
     }
 }
 
-fn check_simulation_complete(mut state: ResMut<SimulateState>, mut exit: EventWriter<AppExit>) {
+fn check_timeline_complete(mut state: ResMut<WriteTimelineState>, mut exit: EventWriter<AppExit>) {
     if (state.frames.len() as u32) < state.total_frames {
         return;
     }
@@ -102,19 +102,19 @@ fn check_simulation_complete(mut state: ResMut<SimulateState>, mut exit: EventWr
         frames: std::mem::take(&mut state.frames),
         events: std::mem::take(&mut state.events),
     };
-    let data = bincode::serialize(&timeline).expect("[simulate] failed to serialize timeline");
+    let data = bincode::serialize(&timeline).expect("[write-timeline] failed to serialize timeline");
     std::fs::write(&state.output, &data)
-        .unwrap_or_else(|_| panic!("[simulate] failed to write {}", state.output.display()));
+        .unwrap_or_else(|_| panic!("[write-timeline] failed to write {}", state.output.display()));
 
     let secs = state.t_start.elapsed().as_secs_f64();
     let sim_secs = state.total_frames as f64 / FPS as f64;
     let bodies = timeline.frames.first().map(Vec::len).unwrap_or(0);
     println!(
-        "[simulate] {} frames ({}s de sim) en {:.2}s → {:.0}x realtime",
+        "[write-timeline] {} frames ({}s de sim) en {:.2}s → {:.0}x realtime",
         state.total_frames, sim_secs, secs, sim_secs / secs,
     );
     println!(
-        "[simulate] {} ready ({:.1} MB, {} cuerpos)",
+        "[write-timeline] {} ready ({:.1} MB, {} cuerpos)",
         state.output.display(),
         data.len() as f64 / 1e6,
         bodies,

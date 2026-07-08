@@ -53,10 +53,11 @@ pub fn record_duration() -> Option<u32> {
     Some(secs)
 }
 
-pub fn simulate_duration() -> Option<u32> {
+pub fn write_timeline_duration() -> Option<u32> {
     let args: Vec<String> = std::env::args().collect();
-    reject_renamed_flag(&args, "--bake", "--simulate");
-    let pos = args.iter().position(|a| a == "--simulate")?;
+    reject_renamed_flag(&args, "--bake", "--write-timeline");
+    reject_renamed_flag(&args, "--simulate", "--write-timeline");
+    let pos = args.iter().position(|a| a == "--write-timeline")?;
     let secs = args
         .get(pos + 1)
         .and_then(|s| s.parse().ok())

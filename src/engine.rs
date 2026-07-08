@@ -5,8 +5,8 @@ use bevy_rapier3d::prelude::*;
 use bevy_rapier3d::render::RapierDebugRenderPlugin;
 use std::time::Duration;
 
-use crate::modes::{SimulationMode, debug_enabled, play_path, record_duration, simulate_duration};
-use crate::plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, SimulatePlugin};
+use crate::modes::{SimulationMode, debug_enabled, play_path, record_duration, write_timeline_duration};
+use crate::plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, WriteTimelinePlugin};
 
 pub struct GameAppConfig {
     pub title: &'static str,
@@ -25,23 +25,23 @@ impl Default for GameAppConfig {
 pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> App {
     let mut app = App::new();
 
-    let simulating = simulate_duration();
-    match (simulating, record_duration()) {
+    let writing_timeline = write_timeline_duration();
+    match (writing_timeline, record_duration()) {
         (Some(_), _)       => add_headless_plugins(&mut app),
         (None, Some(secs)) => { app.add_plugins(RecordPlugin { duration_secs: secs }); }
         (None, None)       => add_windowed_plugins(&mut app, &config),
     }
 
     // Toda la simulación corre en FixedUpdate a 60 steps/s. Ese es el reloj de verdad
-    // del juego; los modificadores --record y --simulate aceleran el wall-clock para
+    // del juego; los modificadores --record y --write-timeline aceleran el wall-clock para
     // generar simulaciones largas rápido, sin alterar la duración lógica de nada.
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
 
-    match (simulating, play_path()) {
-        // Simulate: física + captura de timeline; gana sobre --record/--play.
+    match (writing_timeline, play_path()) {
+        // Escribir timeline: física + captura; gana sobre --record/--play.
         (Some(secs), _) => {
             add_physics(&mut app);
-            app.add_plugins(SimulatePlugin { duration_secs: secs });
+            app.add_plugins(WriteTimelinePlugin { duration_secs: secs });
         }
         // Play: SIN física — la timeline dicta los Transforms y Bevy solo dibuja.
         // Combina con --record (video) o con ventana (preview).
@@ -78,7 +78,7 @@ fn add_physics(app: &mut App) {
     app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_fixed_schedule());
 }
 
-// Simulate: sin ventana, sin GPU, sin render. El loop corre tan rápido como puede y
+// Escritura de timeline: sin ventana, sin GPU, sin render. El loop corre a tope y
 // ManualDuration avanza el reloj exactamente 1/60 por update → cada update = 1 step
 // de física = 1 frame de la timeline (mismo timing determinista que --record).
 // Los init_asset cubren lo que spawn_object toca (meshes/materiales/escenas); sin
