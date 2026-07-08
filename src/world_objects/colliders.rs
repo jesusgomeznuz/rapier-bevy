@@ -8,10 +8,10 @@ use bevy_rapier3d::{
     },
     prelude::*,
 };
-use crate::modes::SimMode;
+use crate::modes::SimulationMode;
 use super::ColliderShape;
 
-pub fn build_collider(shape: ColliderShape, border_radius: Option<f32>, mode: &SimMode) -> Collider {
+pub fn build_collider(shape: ColliderShape, border_radius: Option<f32>, mode: &SimulationMode) -> Collider {
     match shape {
         ColliderShape::Box { hx, hy, hz } => match border_radius {
             Some(br) if br > 0.0 => Collider::round_cuboid(
@@ -40,8 +40,8 @@ pub fn build_collider(shape: ColliderShape, border_radius: Option<f32>, mode: &S
             )])
         }
         ColliderShape::MeshObject { model_name }    => match mode {
-            SimMode::Precomputed       => load_compound(&model_name),
-            SimMode::Raw | SimMode::Bench { .. } => {
+            SimulationMode::Precomputed       => load_compound(&model_name),
+            SimulationMode::Raw | SimulationMode::Bench { .. } => {
                 let (obj_name, group) = obj_source(&model_name);
                 decompose_obj(&format!("assets/{}.obj", obj_name), group)
             }

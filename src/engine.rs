@@ -5,7 +5,7 @@ use bevy_rapier3d::prelude::*;
 use bevy_rapier3d::render::RapierDebugRenderPlugin;
 use std::time::Duration;
 
-use crate::modes::{SimMode, bake_duration, debug_enabled, record_duration, replay_path};
+use crate::modes::{SimulationMode, bake_duration, debug_enabled, record_duration, replay_path};
 use crate::plugins::{BakePlugin, PhysicsStatsPlugin, RecordPlugin, ReplayPlugin};
 
 pub struct GameAppConfig {
@@ -22,7 +22,7 @@ impl Default for GameAppConfig {
     }
 }
 
-pub fn game_app(mode: SimMode, config: GameAppConfig) -> App {
+pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> App {
     let mut app = App::new();
 
     let baking = bake_duration();
@@ -57,6 +57,18 @@ pub fn game_app(mode: SimMode, config: GameAppConfig) -> App {
     }
 
     app.insert_resource(mode);
+    app
+}
+
+pub fn deterministic_physics_game_app(config: GameAppConfig) -> App {
+    let mut app = App::new();
+
+    match record_duration() {
+        Some(secs) => { app.add_plugins(RecordPlugin { duration_secs: secs }); }
+        None => add_windowed_plugins(&mut app, &config),
+    }
+
+    app.insert_resource(Time::<Fixed>::from_hz(60.0));
     app
 }
 

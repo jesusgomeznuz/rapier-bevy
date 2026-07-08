@@ -1,11 +1,11 @@
+use crate::modes::{BenchScene, SimulationMode};
+use crate::plugins::PhysicsStatsPlugin;
+use crate::world_objects::{spawn_chain_grid, spawn_falling_spheres, spawn_stacked_boxes};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use crate::modes::{BenchScene, SimMode};
-use crate::plugins::PhysicsStatsPlugin;
-use crate::world_objects::{spawn_chain_grid, spawn_falling_spheres, spawn_stacked_boxes};
 
-pub fn run_bench_mode(mode: SimMode) {
+pub fn run_bench_mode(mode: SimulationMode) {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
@@ -34,11 +34,13 @@ struct BenchState {
 
 fn setup_bench(
     mut commands: Commands,
-    mode: Res<SimMode>,
+    mode: Res<SimulationMode>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let SimMode::Bench { scene, count } = &*mode else { return };
+    let SimulationMode::Bench { scene, count } = &*mode else {
+        return;
+    };
 
     commands.spawn((
         Collider::cuboid(200.0, 0.1, 200.0),
@@ -48,7 +50,9 @@ fn setup_bench(
     match scene {
         BenchScene::FallingSpheres => spawn_falling_spheres(&mut commands, *count),
         BenchScene::StackedBoxes => spawn_stacked_boxes(&mut commands, *count),
-        BenchScene::ChainGrid => spawn_chain_grid(&mut commands, *count, &mut meshes, &mut materials),
+        BenchScene::ChainGrid => {
+            spawn_chain_grid(&mut commands, *count, &mut meshes, &mut materials)
+        }
     }
 
     println!("bench,scene,count,fps_avg,fps_p01");
@@ -56,7 +60,7 @@ fn setup_bench(
 
 fn run_bench(
     diagnostics: Res<DiagnosticsStore>,
-    mode: Res<SimMode>,
+    mode: Res<SimulationMode>,
     mut state: ResMut<BenchState>,
     mut exit: EventWriter<AppExit>,
 ) {
@@ -77,7 +81,9 @@ fn run_bench(
     }
 
     if state.frame >= warmup_frames + measure_frames {
-        let SimMode::Bench { scene, count } = &*mode else { return };
+        let SimulationMode::Bench { scene, count } = &*mode else {
+            return;
+        };
         let samples = &state.fps_samples;
         let fps_avg = samples.iter().sum::<f64>() / samples.len() as f64;
 
@@ -86,7 +92,13 @@ fn run_bench(
         let p01_idx = ((sorted.len() as f32 * 0.01) as usize).max(1) - 1;
         let fps_p01 = sorted[p01_idx];
 
-        println!("bench,{},{},{:.1},{:.1}", scene.label(), count, fps_avg, fps_p01);
+        println!(
+            "bench,{},{},{:.1},{:.1}",
+            scene.label(),
+            count,
+            fps_avg,
+            fps_p01
+        );
         exit.write(AppExit::Success);
     }
 }

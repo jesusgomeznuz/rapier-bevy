@@ -1,12 +1,12 @@
 use super::{BodyType, ColliderShape, ObjectDef, VisualDef, spawn_object};
-use crate::modes::SimMode;
+use crate::modes::SimulationMode;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 
 pub fn spawn_staircase(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimMode,
+    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
@@ -34,7 +34,7 @@ pub fn spawn_staircase(
 fn spawn_launch_platform(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimMode,
+    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, step_height: f32, step_width: f32, platform_length: f32,
@@ -61,7 +61,7 @@ fn spawn_launch_platform(
 fn spawn_steps(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimMode,
+    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, step_depth: f32, step_height: f32, step_width: f32,
@@ -90,7 +90,7 @@ fn spawn_steps(
 fn spawn_dominoes(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimMode,
+    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, domino_steps: usize,
@@ -119,7 +119,7 @@ fn spawn_dominoes(
 fn spawn_exit_ramp(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimMode,
+    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, domino_steps: usize,
@@ -153,7 +153,7 @@ fn spawn_exit_ramp(
 fn spawn_trigger_ball(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimMode,
+    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, step_height: f32, platform_length: f32, ball_radius: f32,

@@ -1,21 +1,22 @@
 mod engine;
 mod modes;
 mod plugins;
+mod timeline;
 mod world_objects;
 
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
-use engine::{GameAppConfig, game_app};
-use modes::{BenchScene, SimMode};
+use engine::{GameAppConfig, random_physics_game_app};
+use modes::{BenchScene, SimulationMode};
 use plugins::run_bench_mode;
 use world_objects::{
-    ColliderShape, ObjectDef, VehicleDef, VisualDef, preprocess_assets, spawn_object,
+    ColliderShape, ObjectDef, VehicleDef, VisualDef, preprocess_concave_colliders, spawn_object,
     spawn_staircase, spawn_vehicle,
 };
 
 enum DemoCommand {
     Preprocess,
-    Sim(SimMode),
+    Sim(SimulationMode),
     Bench { scene: BenchScene, count: u32 },
 }
 
@@ -35,21 +36,21 @@ fn parse_demo_command() -> DemoCommand {
         return DemoCommand::Bench { scene, count };
     }
     if args.iter().any(|a| a == "--sim-raw") {
-        return DemoCommand::Sim(SimMode::Raw);
+        return DemoCommand::Sim(SimulationMode::Raw);
     }
-    DemoCommand::Sim(SimMode::Precomputed)
+    DemoCommand::Sim(SimulationMode::Precomputed)
 }
 
 fn main() {
     match parse_demo_command() {
-        DemoCommand::Preprocess         => preprocess_assets(),
+        DemoCommand::Preprocess         => preprocess_concave_colliders(),
         DemoCommand::Sim(mode)          => run_demo_sim(mode),
-        DemoCommand::Bench { scene, count } => run_bench_mode(SimMode::Bench { scene, count }),
+        DemoCommand::Bench { scene, count } => run_bench_mode(SimulationMode::Bench { scene, count }),
     }
 }
 
-fn run_demo_sim(mode: SimMode) {
-    game_app(mode, GameAppConfig::default())
+fn run_demo_sim(mode: SimulationMode) {
+    random_physics_game_app(mode, GameAppConfig::default())
         .add_systems(Startup, (spawn_demo_camera, setup_world))
         .run();
 }
@@ -85,7 +86,7 @@ fn spawn_demo_camera(mut commands: Commands, offscreen: Option<Res<plugins::reco
 
 fn setup_world(
     mut commands: Commands,
-    mode: Res<SimMode>,
+    mode: Res<SimulationMode>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,

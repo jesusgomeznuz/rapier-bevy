@@ -11,14 +11,14 @@ impl BenchScene {
     pub fn label(&self) -> &'static str {
         match self {
             BenchScene::FallingSpheres => "falling-spheres",
-            BenchScene::StackedBoxes   => "stacked-boxes",
-            BenchScene::ChainGrid      => "chain-grid",
+            BenchScene::StackedBoxes => "stacked-boxes",
+            BenchScene::ChainGrid => "chain-grid",
         }
     }
 }
 
 #[derive(Resource)]
-pub enum SimMode {
+pub enum SimulationMode {
     Precomputed,
     Raw,
     Bench { scene: BenchScene, count: u32 },
@@ -26,15 +26,15 @@ pub enum SimMode {
 
 pub enum EngineMode {
     Preprocess,
-    Sim(SimMode),
+    Sim(SimulationMode),
 }
 
-impl SimMode {
+impl SimulationMode {
     pub fn label(&self) -> &'static str {
         match self {
-            SimMode::Precomputed          => "sim-precomputed",
-            SimMode::Raw                  => "sim-raw",
-            SimMode::Bench { scene, .. }  => scene.label(),
+            SimulationMode::Precomputed => "sim-precomputed",
+            SimulationMode::Raw => "sim-raw",
+            SimulationMode::Bench { scene, .. } => scene.label(),
         }
     }
 }
@@ -45,22 +45,30 @@ pub fn debug_enabled() -> bool {
 
 pub fn record_duration() -> Option<u32> {
     let args: Vec<String> = std::env::args().collect();
-    let pos  = args.iter().position(|a| a == "--record")?;
-    let secs = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(60u32);
+    let pos = args.iter().position(|a| a == "--record")?;
+    let secs = args
+        .get(pos + 1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60u32);
     Some(secs)
 }
 
 pub fn bake_duration() -> Option<u32> {
     let args: Vec<String> = std::env::args().collect();
-    let pos  = args.iter().position(|a| a == "--bake")?;
-    let secs = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(60u32);
+    let pos = args.iter().position(|a| a == "--bake")?;
+    let secs = args
+        .get(pos + 1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60u32);
     Some(secs)
 }
 
 pub fn replay_path() -> Option<std::path::PathBuf> {
     let args: Vec<String> = std::env::args().collect();
-    let pos  = args.iter().position(|a| a == "--replay")?;
-    let path = args.get(pos + 1).expect("--replay requiere la ruta de la timeline (ej. outputs/bake_60s.timeline)");
+    let pos = args.iter().position(|a| a == "--replay")?;
+    let path = args
+        .get(pos + 1)
+        .expect("--replay requiere la ruta de la timeline (ej. outputs/bake_60s.timeline)");
     Some(std::path::PathBuf::from(path))
 }
 
@@ -69,17 +77,23 @@ pub fn parse_engine_mode(args: &[String]) -> EngineMode {
         return EngineMode::Preprocess;
     }
     if args.iter().any(|a| a == "--sim-raw") {
-        return EngineMode::Sim(SimMode::Raw);
+        return EngineMode::Sim(SimulationMode::Raw);
     }
     if let Some(pos) = args.iter().position(|a| a == "--bench") {
-        let scene_str = args.get(pos + 1).map(String::as_str).unwrap_or("falling-spheres");
-        let count     = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(100u32);
+        let scene_str = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or("falling-spheres");
+        let count = args
+            .get(pos + 2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100u32);
         let scene = match scene_str {
             "stacked-boxes" => BenchScene::StackedBoxes,
-            "chain-grid"    => BenchScene::ChainGrid,
-            _               => BenchScene::FallingSpheres,
+            "chain-grid" => BenchScene::ChainGrid,
+            _ => BenchScene::FallingSpheres,
         };
-        return EngineMode::Sim(SimMode::Bench { scene, count });
+        return EngineMode::Sim(SimulationMode::Bench { scene, count });
     }
-    EngineMode::Sim(SimMode::Precomputed)
+    EngineMode::Sim(SimulationMode::Precomputed)
 }

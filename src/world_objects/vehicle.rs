@@ -1,5 +1,5 @@
 use super::{BodyType, ColliderShape, ObjectDef, VisualDef, spawn_object};
-use crate::modes::SimMode;
+use crate::modes::SimulationMode;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use bevy_rapier3d::geometry::Group;
@@ -13,7 +13,7 @@ pub struct VehicleDef {
 pub fn spawn_vehicle(
     commands: &mut Commands,
     def: VehicleDef,
-    mode: &SimMode,
+    mode: &SimulationMode,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -47,7 +47,7 @@ pub fn spawn_vehicle(
 fn spawn_chassis(
     commands: &mut Commands,
     def: &VehicleDef,
-    mode: &SimMode,
+    mode: &SimulationMode,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -80,7 +80,7 @@ fn spawn_chassis(
 fn spawn_wheels(
     commands: &mut Commands,
     def: &VehicleDef,
-    mode: &SimMode,
+    mode: &SimulationMode,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,

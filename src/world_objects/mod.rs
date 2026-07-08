@@ -10,7 +10,7 @@ pub use chain::{ChainDef, ChainPath, spawn_chain};
 pub use staircase::spawn_staircase;
 pub use vehicle::{VehicleDef, spawn_vehicle};
 
-use crate::modes::SimMode;
+use crate::modes::SimulationMode;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use bevy_mod_rounded_box::RoundedBox;
@@ -142,7 +142,7 @@ impl Default for ObjectDef {
 pub fn spawn_object(
     commands: &mut Commands,
     def: ObjectDef,
-    mode: &SimMode,
+    mode: &SimulationMode,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -332,7 +332,7 @@ fn build_round_cylinder_mesh(half_height: f32, radius: f32, border: f32) -> Mesh
     mesh
 }
 
-pub fn preprocess_assets() {
+pub fn preprocess_concave_colliders() {
     use bevy_rapier3d::prelude::VHACDParameters;
     let start = std::time::Instant::now();
     colliders::preprocess_obj(
