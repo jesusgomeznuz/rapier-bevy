@@ -41,9 +41,15 @@ impl Plugin for PlayPlugin {
     }
 }
 
+// La partitura mueve lo que lleva TimelineKey; el filtro RigidBody queda como
+// respaldo para cuerpos físicos sin key (juegos donde todo lo posado ES física).
+// Los juegos sin física (musical-path) posan actores puros: Transform + key.
 fn apply_timeline_frame(
     mut state: ResMut<PlayState>,
-    mut bodies: Query<(Entity, Option<&TimelineKey>, &mut Transform), With<RigidBody>>,
+    mut bodies: Query<
+        (Entity, Option<&TimelineKey>, &mut Transform),
+        Or<(With<RigidBody>, With<TimelineKey>)>,
+    >,
     mut events: EventWriter<PlayEvent>,
 ) {
     let cursor = state.cursor;

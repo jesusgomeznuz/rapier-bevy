@@ -60,18 +60,6 @@ pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> A
     app
 }
 
-pub fn deterministic_physics_game_app(config: GameAppConfig) -> App {
-    let mut app = App::new();
-
-    match record_duration() {
-        Some(secs) => { app.add_plugins(RecordPlugin { duration_secs: secs }); }
-        None => add_windowed_plugins(&mut app, &config),
-    }
-
-    app.insert_resource(Time::<Fixed>::from_hz(60.0));
-    app
-}
-
 // El TimestepMode va antes del plugin para que su init_resource respete el Fixed.
 fn add_physics(app: &mut App) {
     app.insert_resource(TimestepMode::Fixed { dt: 1.0 / 60.0, substeps: 1 });
