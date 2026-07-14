@@ -3,8 +3,70 @@
 //! por aquí. La maquinaria que lo escribe vive en `plugins/simulate.rs`
 //! (SimulatePlugin) y la que lo actúa en `plugins/play.rs` (PlayPlugin).
 
+use bevy::ecs::system::ScheduleSystem;
 use bevy::prelude::*;
+use bevy_rapier3d::prelude::PhysicsSet;
 use serde::{Deserialize, Serialize};
+
+/// El vocabulario del juego en la pista de eventos: cómo un evento se escribe
+/// como línea de la partitura (payload) y cómo se lee de vuelta (parse). La
+/// ADUANA — el enum con su formato, escribir y leer juntos — vive en cada
+/// juego; la banda que la transporta es estructura y vive aquí.
+pub trait TimelineVocabulary: Event {
+    fn payload(&self) -> String;
+    fn parse(line: &str) -> Option<Self>
+    where
+        Self: Sized;
+}
+
+/// La etiqueta de la banda: los sistemas del juego que emiten eventos en el
+/// mismo tick (sensores, directores) se ordenan `.before(EventBand)` sin
+/// conocer a los músicos internos.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EventBand;
+
+/// La banda de eventos — igual en todos los juegos y en ambos mundos: la
+/// actuación re-emite (sobres → eventos), la física escribe (eventos → buzón)
+/// y la escenografía del juego monta, encadenadas en el mismo tick. emit y
+/// send son plomería del contrato — solo usan parse/payload; el único músico
+/// que pone el juego es su escenografía.
+pub fn run_the_event_band<E: TimelineVocabulary, M>(
+    app: &mut App,
+    stage: impl IntoScheduleConfigs<ScheduleSystem, M>,
+) {
+    app.add_event::<E>();
+    app.add_event::<PlayEvent>();
+    app.add_systems(
+        FixedUpdate,
+        (emit_events_from_timeline::<E>, send_events_to_timeline::<E>, stage)
+            .chain()
+            .in_set(EventBand)
+            .after(PhysicsSet::Writeback),
+    );
+}
+
+fn emit_events_from_timeline<E: TimelineVocabulary>(
+    mut wire: EventReader<PlayEvent>,
+    mut events: EventWriter<E>,
+) {
+    for PlayEvent(payload) in wire.read() {
+        events.write(E::parse(payload).unwrap_or_else(|| {
+            panic!(
+                "evento ilegible en la partitura: '{payload}' — write-timeline y play hablan idiomas distintos"
+            )
+        }));
+    }
+}
+
+fn send_events_to_timeline<E: TimelineVocabulary>(
+    mut events: EventReader<E>,
+    mut timeline: Option<ResMut<TimelineEvents>>,
+) {
+    let Some(timeline) = timeline.as_deref_mut() else { return };
+    for event in events.read() {
+        timeline.0.push(event.payload());
+    }
+}
 
 /// Pose de un cuerpo en un frame: posición + rotación (quaternion xyzw) + escala.
 /// La escala viaja porque hay gameplay que la muta (ej. el shrink de canicas);
