@@ -43,12 +43,35 @@ pub struct TimelineEvents(pub Vec<String>);
 #[derive(Event)]
 pub struct PlayEvent(pub String);
 
-/// Etiqueta para los sistemas del juego que solo existen con física real
-/// (reacciones a contactos). El juego los marca `.in_set(RealCollisions)` —
-/// declara lo que SON, no cuándo corren — y el engine los apaga en --play.
-/// El código del juego nunca pregunta por modos: es exclusivamente juego.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RealCollisions;
+/// Los dados de la simulación: la única fuente de azar del mundo vivo.
+/// Solo están en la mesa donde hay física (nativo y --write-timeline); en
+/// --play la suerte ya está echada — quedó escrita en la partitura. Todo
+/// sistema del juego que declare `ResMut<Dice>` se duerme solo en play
+/// (parámetro ausente → Bevy lo salta): el juego declara lo que necesita,
+/// nunca pregunta por modos. La verdad nueva solo nace del choque o del azar,
+/// y en play no existe ninguno de los dos.
+#[derive(Resource)]
+pub struct Dice(u64);
+
+impl Dice {
+    pub fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    /// SplitMix64 — determinista, pequeño y sin dependencias.
+    pub fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+        z ^ (z >> 31)
+    }
+
+    /// Tira un dado de `n` caras: índice uniforme en 0..n.
+    pub fn roll(&mut self, n: usize) -> usize {
+        (self.next_u64() % n as u64) as usize
+    }
+}
 
 /// Identidad estable de un cuerpo en la timeline, asignada por el juego de forma
 /// determinista. Sin ella el mapeo cae al índice de Entity — que Bevy REUTILIZA

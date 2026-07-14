@@ -1,4 +1,6 @@
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
+use bevy::ecs::error::{BevyError, ErrorContext, GLOBAL_ERROR_HANDLER};
+use bevy::ecs::system::SystemParamValidationError;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use bevy_rapier3d::prelude::*;
@@ -11,6 +13,9 @@ use crate::plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, WriteTimeline
 pub struct GameAppConfig {
     pub title: &'static str,
     pub resolution: (f32, f32),
+    /// El azar de la partida. El juego lo recibe por su puerta (--seed) y lo
+    /// entrega aquí; el engine decide si pone dados en la mesa (solo con física).
+    pub seed: u64,
 }
 
 impl Default for GameAppConfig {
@@ -18,14 +23,21 @@ impl Default for GameAppConfig {
         Self {
             title: "rapier-bevy",
             resolution: (1280.0, 720.0),
+            seed: 0,
         }
     }
 }
 
 pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> App {
-    let mut app = App::new();
-
     let writing_timeline = write_timeline_duration();
+
+    // El manejador global se fija ANTES de construir el App: Bevy lo cachea
+    // con get_or_init en cuanto arma sus schedules, y después ya nadie lo cambia.
+    if writing_timeline.is_none() && timeline_path().is_some() {
+        let _ = GLOBAL_ERROR_HANDLER.set(sleep_systems_with_absent_needs);
+    }
+
+    let mut app = App::new();
     match (writing_timeline, record_duration()) {
         (Some(_), _)       => add_headless_plugins(&mut app),
         (None, Some(secs)) => { app.add_plugins(RecordPlugin { duration_secs: secs }); }
@@ -40,19 +52,19 @@ pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> A
     match (writing_timeline, timeline_path()) {
         // Escribir timeline: física + captura; gana sobre --record/--play.
         (Some(secs), _) => {
-            add_physics(&mut app);
+            add_physics(&mut app, config.seed);
             app.add_plugins(WriteTimelinePlugin { duration_secs: secs });
         }
         // Play: SIN física — la timeline dicta los Transforms y Bevy solo dibuja.
-        // Combina con --record (video) o con ventana (preview). Las reacciones
-        // a contactos reales del juego (RealCollisions) se apagan aquí: el
-        // juego etiqueta, el engine decide.
+        // Combina con --record (video) o con ventana (preview). Aquí no se pone
+        // NI física NI dados en la mesa: los sistemas del juego que declaran
+        // choques (EventReader<CollisionEvent>) o azar (ResMut<Dice>) se
+        // duermen solos por necesidad ausente. El juego nunca supo de modos.
         (None, Some(path)) => {
             app.add_plugins(PlayPlugin { path });
-            app.configure_sets(FixedUpdate, crate::timeline::RealCollisions.run_if(|| false));
         }
         (None, None) => {
-            add_physics(&mut app);
+            add_physics(&mut app, config.seed);
             if debug_enabled() {
                 app.add_plugins(RapierDebugRenderPlugin::default());
             }
@@ -63,9 +75,24 @@ pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> A
     app
 }
 
+// En play un sistema del juego puede declarar necesidades que este mundo no
+// tiene (choques, dados). Bevy reporta esa carencia como error de validación
+// de parámetros; aquí se convierte en sueño — el sistema se salta el tick —
+// porque su verdad ya viene escrita en la partitura. Todo lo demás truena
+// igual que siempre: nada falla en silencio salvo el dormir diseñado.
+fn sleep_systems_with_absent_needs(error: BevyError, ctx: ErrorContext) {
+    if error.downcast_ref::<SystemParamValidationError>().is_some() {
+        bevy::log::debug_once!("duerme en play: {} — {}", ctx.name(), error);
+        return;
+    }
+    bevy::ecs::error::panic(error, ctx);
+}
+
 // El TimestepMode va antes del plugin para que su init_resource respete el Fixed.
-fn add_physics(app: &mut App) {
+// Donde hay física hay dados: la única fuente de azar del mundo vivo.
+fn add_physics(app: &mut App, seed: u64) {
     app.insert_resource(TimestepMode::Fixed { dt: 1.0 / 60.0, substeps: 1 });
+    app.insert_resource(crate::timeline::Dice::new(seed));
     app.add_plugins(RapierPhysicsPlugin::<NoUserData>::default().in_fixed_schedule());
 }
 
