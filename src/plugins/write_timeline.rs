@@ -46,7 +46,11 @@ impl Plugin for WriteTimelinePlugin {
 
 fn capture_frame(
     mut state: ResMut<WriteTimelineState>,
-    bodies: Query<(Entity, Option<&TimelineKey>, &Transform), With<RigidBody>>,
+    // Mismo filtro que `play::apply_timeline_frame` — simulate y play deben
+    // spawnear el mismo mundo. Los objetos de nivel (world/modules.rs) llevan
+    // TimelineKey pero, si son BodyType::Static, no llevan RigidBody; sin el
+    // Or aquí, write-timeline los ignoraba y play sí los contaba (mismatch).
+    bodies: Query<(Entity, Option<&TimelineKey>, &Transform), Or<(With<RigidBody>, With<TimelineKey>)>>,
 ) {
     if state.frames.len() as u32 >= state.total_frames {
         return;

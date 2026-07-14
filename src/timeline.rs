@@ -43,6 +43,13 @@ pub struct TimelineEvents(pub Vec<String>);
 #[derive(Event)]
 pub struct PlayEvent(pub String);
 
+/// Etiqueta para los sistemas del juego que solo existen con física real
+/// (reacciones a contactos). El juego los marca `.in_set(RealCollisions)` —
+/// declara lo que SON, no cuándo corren — y el engine los apaga en --play.
+/// El código del juego nunca pregunta por modos: es exclusivamente juego.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RealCollisions;
+
 /// Identidad estable de un cuerpo en la timeline, asignada por el juego de forma
 /// determinista. Sin ella el mapeo cae al índice de Entity — que Bevy REUTILIZA
 /// tras un despawn: si simulate y play despawnean entidades distintas (la

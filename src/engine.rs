@@ -44,9 +44,12 @@ pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> A
             app.add_plugins(WriteTimelinePlugin { duration_secs: secs });
         }
         // Play: SIN física — la timeline dicta los Transforms y Bevy solo dibuja.
-        // Combina con --record (video) o con ventana (preview).
+        // Combina con --record (video) o con ventana (preview). Las reacciones
+        // a contactos reales del juego (RealCollisions) se apagan aquí: el
+        // juego etiqueta, el engine decide.
         (None, Some(path)) => {
             app.add_plugins(PlayPlugin { path });
+            app.configure_sets(FixedUpdate, crate::timeline::RealCollisions.run_if(|| false));
         }
         (None, None) => {
             add_physics(&mut app);

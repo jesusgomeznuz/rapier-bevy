@@ -65,6 +65,13 @@ pub fn write_timeline_duration() -> Option<u32> {
     Some(secs)
 }
 
+/// Cuánto dura la sesión de video — venga de --record o de --write-timeline.
+/// La puerta (args.rs) de cada juego la consulta y la entrega como parámetro:
+/// el juego recibe "la carrera dura N segundos" sin saber de flags.
+pub fn session_duration_secs() -> Option<u32> {
+    record_duration().or_else(write_timeline_duration)
+}
+
 pub fn timeline_path() -> Option<std::path::PathBuf> {
     let args: Vec<String> = std::env::args().collect();
     reject_renamed_flag(&args, "--replay", "--play");
