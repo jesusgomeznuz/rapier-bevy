@@ -1,7 +1,8 @@
-//! El contrato de datos entre simulate y play — el equivalente de `render_data.rs`
-//! en fframes-templates: TODO lo que cruza de la simulación a la actuación pasa
-//! por aquí. La maquinaria que lo escribe vive en `plugins/simulate.rs`
-//! (SimulatePlugin) y la que lo actúa en `plugins/play.rs` (PlayPlugin).
+//! El contrato de datos entre write-timeline y play — el equivalente de
+//! `render_data.rs` en fframes-templates: TODO lo que cruza de la simulación a
+//! la actuación pasa por aquí. La maquinaria que lo escribe (el fotógrafo) vive
+//! en `plugins/write_timeline.rs` (WriteTimelinePlugin) y la que lo actúa en
+//! `plugins/play.rs` (PlayPlugin).
 
 use bevy::ecs::system::ScheduleSystem;
 use bevy::prelude::*;
@@ -25,11 +26,11 @@ pub trait TimelineVocabulary: Event {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EventBand;
 
-/// La banda de eventos — igual en todos los juegos y en ambos mundos: la
-/// actuación re-emite (sobres → eventos), la física escribe (eventos → buzón)
-/// y la escenografía del juego monta, encadenadas en el mismo tick. emit y
-/// send son plomería del contrato — solo usan parse/payload; el único músico
-/// que pone el juego es su escenografía.
+/// La banda de eventos — igual en todos los juegos y en ambos mundos:
+/// replay (sobres de la partitura → eventos vivos), record (eventos → buzón
+/// de la partitura) y la escenografía del juego, encadenadas en el mismo
+/// tick. replay y record son plomería del contrato — solo usan parse/payload;
+/// el único músico que pone el juego es su escenografía.
 pub fn run_the_event_band<E: TimelineVocabulary, M>(
     app: &mut App,
     stage: impl IntoScheduleConfigs<ScheduleSystem, M>,
@@ -38,14 +39,14 @@ pub fn run_the_event_band<E: TimelineVocabulary, M>(
     app.add_event::<PlayEvent>();
     app.add_systems(
         FixedUpdate,
-        (emit_events_from_timeline::<E>, send_events_to_timeline::<E>, stage)
+        (replay_events_from_timeline::<E>, record_events_to_timeline::<E>, stage)
             .chain()
             .in_set(EventBand)
             .after(PhysicsSet::Writeback),
     );
 }
 
-fn emit_events_from_timeline<E: TimelineVocabulary>(
+fn replay_events_from_timeline<E: TimelineVocabulary>(
     mut wire: EventReader<PlayEvent>,
     mut events: EventWriter<E>,
 ) {
@@ -58,7 +59,7 @@ fn emit_events_from_timeline<E: TimelineVocabulary>(
     }
 }
 
-fn send_events_to_timeline<E: TimelineVocabulary>(
+fn record_events_to_timeline<E: TimelineVocabulary>(
     mut events: EventReader<E>,
     mut timeline: Option<ResMut<TimelineEvents>>,
 ) {
@@ -79,8 +80,8 @@ pub struct Pose {
 }
 
 /// La partitura: la pose de cada cuerpo en cada frame, a 60 fps.
-/// Los cuerpos se identifican por [`TimelineKey`] — simulate y play deben asignar
-/// las mismas keys (mismo setup, distinto flag del mismo binario).
+/// Los cuerpos se identifican por [`TimelineKey`] — write-timeline y play deben
+/// asignar las mismas keys (mismo setup, distinto flag del mismo binario).
 /// Se serializa con bincode a `outputs/simulation_<N>s.timeline`.
 #[derive(Serialize, Deserialize)]
 pub struct Timeline {
@@ -88,16 +89,16 @@ pub struct Timeline {
     /// `frames[f]` = (TimelineKey, Pose) de cada cuerpo en el frame `f`, orden por key.
     pub frames: Vec<Vec<(u64, Pose)>>,
     /// Eventos opacos del juego por frame, en orden. El engine no interpreta el
-    /// payload: el juego los empuja en simulate (TimelineEvents) y los recibe en
-    /// play (PlayEvent) para reproducir lo que las poses no capturan — visuales
-    /// y despawns disparados por colisión.
+    /// payload: el juego los empuja en write-timeline (TimelineEvents) y los
+    /// recibe en play (PlayEvent) para reproducir lo que las poses no capturan —
+    /// visuales y despawns disparados por colisión.
     pub events: Vec<(u32, String)>,
 }
 
 /// Buzón hacia la partitura: el juego empuja aquí sus eventos durante el
-/// FixedUpdate y el engine los asocia al frame en curso. Solo existe en modo
-/// simulate — el juego lo toma como `Option<ResMut<TimelineEvents>>` y en los
-/// demás modos no paga nada.
+/// FixedUpdate y el engine los asocia al frame en curso. Solo existe en
+/// --write-timeline — el juego lo toma como `Option<ResMut<TimelineEvents>>`
+/// y en los demás mundos no paga nada.
 #[derive(Resource, Default)]
 pub struct TimelineEvents(pub Vec<String>);
 
