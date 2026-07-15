@@ -4,7 +4,7 @@ pub mod plugins;
 pub mod timeline;
 pub mod world_objects;
 
-pub use engine::{GameAppConfig, random_physics_game_app};
+pub use engine::{GameAppConfig, game_app};
 pub use modes::{record_duration, session_duration_secs, timeline_path, write_timeline_duration};
 pub use plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, WriteTimelinePlugin};
 pub use timeline::{

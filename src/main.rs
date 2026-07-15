@@ -6,7 +6,7 @@ mod world_objects;
 
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
-use engine::{GameAppConfig, random_physics_game_app};
+use engine::{GameAppConfig, game_app};
 use world_objects::{
     ColliderShape, ObjectDef, VehicleDef, VisualDef, preprocess_concave_colliders, spawn_object,
     spawn_staircase, spawn_vehicle,
@@ -33,7 +33,7 @@ fn main() {
 }
 
 fn run_demo_sim() {
-    random_physics_game_app(GameAppConfig::default())
+    game_app(GameAppConfig::default())
         .add_systems(Startup, (spawn_demo_camera, setup_world))
         .run();
 }

@@ -27,7 +27,7 @@ impl Default for GameAppConfig {
     }
 }
 
-pub fn random_physics_game_app(config: GameAppConfig) -> App {
+pub fn game_app(config: GameAppConfig) -> App {
     let writing_timeline = write_timeline_duration();
 
     // El manejador global se fija ANTES de construir el App: Bevy lo cachea
