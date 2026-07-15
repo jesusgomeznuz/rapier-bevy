@@ -16,6 +16,7 @@ bevy = { version = "0.16.1", features = ["configurable_error_handler"] }
 bevy_rapier3d = { version = "0.31.0", features = ["simd-stable", "debug-render-3d"] }
 bincode = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tobj = "4.0.3"
 crossbeam-channel = "0.5"
 bevy_mod_rounded_box = "0.10"

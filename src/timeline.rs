@@ -7,18 +7,8 @@
 use bevy::ecs::system::ScheduleSystem;
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::PhysicsSet;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-
-/// El vocabulario del juego en la pista de eventos: cómo un evento se escribe
-/// como línea de la partitura (payload) y cómo se lee de vuelta (parse). La
-/// ADUANA — el enum con su formato, escribir y leer juntos — vive en cada
-/// juego; la banda que la transporta es estructura y vive aquí.
-pub trait TimelineVocabulary: Event {
-    fn payload(&self) -> String;
-    fn parse(line: &str) -> Option<Self>
-    where
-        Self: Sized;
-}
 
 /// La etiqueta de la banda: los sistemas del juego que emiten eventos en el
 /// mismo tick (sensores, directores) se ordenan `.before(EventBand)` sin
@@ -27,11 +17,12 @@ pub trait TimelineVocabulary: Event {
 pub struct EventBand;
 
 /// La banda de eventos — igual en todos los juegos y en ambos mundos:
-/// replay (sobres de la partitura → eventos vivos), record (eventos → buzón
-/// de la partitura) y la escenografía del juego, encadenadas en el mismo
-/// tick. replay y record son plomería del contrato — solo usan parse/payload;
-/// el único músico que pone el juego es su escenografía.
-pub fn run_the_event_band<E: TimelineVocabulary, M>(
+/// replay (renglones de la partitura → eventos vivos), record (eventos →
+/// buzón de la partitura) y la escenografía del juego, encadenadas en el
+/// mismo tick. La ADUANA es el propio enum del juego: con
+/// `#[derive(Event, Serialize, Deserialize)]` la ida y la vuelta se derivan
+/// de la estructura — no existe formato a mano que pueda desalinearse.
+pub fn run_the_event_band<E: Event + Serialize + DeserializeOwned, M>(
     app: &mut App,
     stage: impl IntoScheduleConfigs<ScheduleSystem, M>,
 ) {
@@ -46,26 +37,28 @@ pub fn run_the_event_band<E: TimelineVocabulary, M>(
     );
 }
 
-fn replay_events_from_timeline<E: TimelineVocabulary>(
+fn replay_events_from_timeline<E: Event + DeserializeOwned>(
     mut wire: EventReader<PlayEvent>,
     mut events: EventWriter<E>,
 ) {
-    for PlayEvent(payload) in wire.read() {
-        events.write(E::parse(payload).unwrap_or_else(|| {
+    for PlayEvent(line) in wire.read() {
+        events.write(serde_json::from_str(line).unwrap_or_else(|err| {
             panic!(
-                "evento ilegible en la partitura: '{payload}' — write-timeline y play hablan idiomas distintos"
+                "evento ilegible en la partitura: '{line}' ({err}) — write-timeline y play hablan idiomas distintos"
             )
         }));
     }
 }
 
-fn record_events_to_timeline<E: TimelineVocabulary>(
+fn record_events_to_timeline<E: Event + Serialize>(
     mut events: EventReader<E>,
     mut timeline: Option<ResMut<TimelineEvents>>,
 ) {
     let Some(timeline) = timeline.as_deref_mut() else { return };
     for event in events.read() {
-        timeline.0.push(event.payload());
+        timeline
+            .0
+            .push(serde_json::to_string(event).expect("evento no serializable a la partitura"));
     }
 }
 
