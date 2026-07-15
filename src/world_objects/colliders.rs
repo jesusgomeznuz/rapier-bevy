@@ -8,10 +8,9 @@ use bevy_rapier3d::{
     },
     prelude::*,
 };
-use crate::modes::SimulationMode;
 use super::ColliderShape;
 
-pub fn build_collider(shape: ColliderShape, border_radius: Option<f32>, mode: &SimulationMode) -> Collider {
+pub fn build_collider(shape: ColliderShape, border_radius: Option<f32>) -> Collider {
     match shape {
         ColliderShape::Box { hx, hy, hz } => match border_radius {
             Some(br) if br > 0.0 => Collider::round_cuboid(
@@ -39,13 +38,10 @@ pub fn build_collider(shape: ColliderShape, border_radius: Option<f32>, mode: &S
                 inner,
             )])
         }
-        ColliderShape::MeshObject { model_name }    => match mode {
-            SimulationMode::Precomputed       => load_compound(&model_name),
-            SimulationMode::Raw | SimulationMode::Bench { .. } => {
-                let (obj_name, group) = obj_source(&model_name);
-                decompose_obj(&format!("assets/{}.obj", obj_name), group)
-            }
-        },
+        // Los colisionadores de malla SIEMPRE vienen precomputados (.compound
+        // VHACD): quien fabrica el asset fabrica su compound (torus_assets,
+        // preprocess_obj). El juego nunca descompone geometría en runtime.
+        ColliderShape::MeshObject { model_name } => load_compound(&model_name),
     }
 }
 
@@ -140,25 +136,12 @@ fn load_obj(path: &str, group: Option<&str>) -> (Vec<Point<f32>>, Vec<[u32; 3]>)
     (vertices, indices)
 }
 
-fn chassis_params() -> VHACDParameters {
-    VHACDParameters { resolution: 64, max_convex_hulls: 4, ..Default::default() }
-}
-
 // Mapea el nombre del asset al OBJ fuente y al grupo a filtrar
 fn obj_source(model_name: &str) -> (&str, Option<&str>) {
     match model_name {
         "vehicle-racer-chassis" => ("vehicle-racer", Some("vehicle-racer")),
         other => (other, None),
     }
-}
-
-fn decompose_obj(obj_path: &str, group: Option<&str>) -> Collider {
-    let (vertices, indices) = load_obj(obj_path, group);
-    Collider::from(SharedShape::convex_decomposition_with_params(
-        &vertices,
-        &indices,
-        &chassis_params(),
-    ))
 }
 
 fn parts_to_json(parts: &Vec<Vec<[f32; 3]>>) -> String {

@@ -1,12 +1,10 @@
 use super::{BodyType, ColliderShape, ObjectDef, VisualDef, spawn_object};
-use crate::modes::SimulationMode;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 
 pub fn spawn_staircase(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
@@ -24,17 +22,16 @@ pub fn spawn_staircase(
     let ramp_horizontal = 3.2;
     let ramp_hy         = 0.05;
 
-    spawn_launch_platform(commands, asset_server, mode, meshes, materials, steps, step_height, step_width, platform_length);
-    spawn_steps(commands, asset_server, mode, meshes, materials, steps, step_depth, step_height, step_width);
-    spawn_dominoes(commands, asset_server, mode, meshes, materials, steps, domino_steps, step_depth, step_height, domino_hx, domino_hy, domino_hz);
-    spawn_exit_ramp(commands, asset_server, mode, meshes, materials, steps, domino_steps, step_depth, step_height, floor_y, ramp_horizontal, ramp_hy, step_width);
-    spawn_trigger_ball(commands, asset_server, mode, meshes, materials, steps, step_height, platform_length, ball_radius);
+    spawn_launch_platform(commands, asset_server, meshes, materials, steps, step_height, step_width, platform_length);
+    spawn_steps(commands, asset_server, meshes, materials, steps, step_depth, step_height, step_width);
+    spawn_dominoes(commands, asset_server, meshes, materials, steps, domino_steps, step_depth, step_height, domino_hx, domino_hy, domino_hz);
+    spawn_exit_ramp(commands, asset_server, meshes, materials, steps, domino_steps, step_depth, step_height, floor_y, ramp_horizontal, ramp_hy, step_width);
+    spawn_trigger_ball(commands, asset_server, meshes, materials, steps, step_height, platform_length, ball_radius);
 }
 
 fn spawn_launch_platform(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, step_height: f32, step_width: f32, platform_length: f32,
@@ -54,14 +51,13 @@ fn spawn_launch_platform(
             visual: Some(VisualDef::white_matte()),
             ..Default::default()
         },
-        mode, asset_server, meshes, materials,
+        asset_server, meshes, materials,
     );
 }
 
 fn spawn_steps(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, step_depth: f32, step_height: f32, step_width: f32,
@@ -82,7 +78,7 @@ fn spawn_steps(
                 visual: Some(VisualDef::white_matte()),
                 ..Default::default()
             },
-            mode, asset_server, meshes, materials,
+            asset_server, meshes, materials,
         );
     }
 }
@@ -90,7 +86,6 @@ fn spawn_steps(
 fn spawn_dominoes(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, domino_steps: usize,
@@ -111,7 +106,7 @@ fn spawn_dominoes(
                 visual: Some(VisualDef::white_matte()),
                 ..Default::default()
             },
-            mode, asset_server, meshes, materials,
+            asset_server, meshes, materials,
         );
     }
 }
@@ -119,7 +114,6 @@ fn spawn_dominoes(
 fn spawn_exit_ramp(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, domino_steps: usize,
@@ -146,14 +140,13 @@ fn spawn_exit_ramp(
             visual: Some(VisualDef::white_matte()),
             ..Default::default()
         },
-        mode, asset_server, meshes, materials,
+        asset_server, meshes, materials,
     );
 }
 
 fn spawn_trigger_ball(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    mode: &SimulationMode,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     steps: usize, step_height: f32, platform_length: f32, ball_radius: f32,
@@ -171,6 +164,6 @@ fn spawn_trigger_ball(
             visual: Some(VisualDef::gold()),
             ..Default::default()
         },
-        mode, asset_server, meshes, materials,
+        asset_server, meshes, materials,
     );
 }

@@ -1,5 +1,4 @@
 use super::{BodyType, ColliderShape, ObjectDef, VisualDef, spawn_object};
-use crate::modes::SimulationMode;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use bevy_rapier3d::geometry::Group;
@@ -13,7 +12,6 @@ pub struct VehicleDef {
 pub fn spawn_vehicle(
     commands: &mut Commands,
     def: VehicleDef,
-    mode: &SimulationMode,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -24,7 +22,6 @@ pub fn spawn_vehicle(
     let chassis = spawn_chassis(
         commands,
         &def,
-        mode,
         asset_server,
         meshes,
         materials,
@@ -34,7 +31,6 @@ pub fn spawn_vehicle(
     let wheels = spawn_wheels(
         commands,
         &def,
-        mode,
         asset_server,
         meshes,
         materials,
@@ -47,7 +43,6 @@ pub fn spawn_vehicle(
 fn spawn_chassis(
     commands: &mut Commands,
     def: &VehicleDef,
-    mode: &SimulationMode,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -70,7 +65,6 @@ fn spawn_chassis(
             visual: Some(VisualDef::white_matte()),
             ..Default::default()
         },
-        mode,
         asset_server,
         meshes,
         materials,
@@ -80,7 +74,6 @@ fn spawn_chassis(
 fn spawn_wheels(
     commands: &mut Commands,
     def: &VehicleDef,
-    mode: &SimulationMode,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -113,7 +106,6 @@ fn spawn_wheels(
                 visual: Some(VisualDef::from_scene("wheel-medium.glb#Scene0")),
                 ..Default::default()
             },
-            mode,
             asset_server,
             meshes,
             materials,

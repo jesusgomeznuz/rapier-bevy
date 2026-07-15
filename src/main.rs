@@ -7,8 +7,6 @@ mod world_objects;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use engine::{GameAppConfig, random_physics_game_app};
-use modes::{BenchScene, SimulationMode};
-use plugins::run_bench_mode;
 use world_objects::{
     ColliderShape, ObjectDef, VehicleDef, VisualDef, preprocess_concave_colliders, spawn_object,
     spawn_staircase, spawn_vehicle,
@@ -16,8 +14,7 @@ use world_objects::{
 
 enum DemoCommand {
     Preprocess,
-    Sim(SimulationMode),
-    Bench { scene: BenchScene, count: u32 },
+    Sim,
 }
 
 fn parse_demo_command() -> DemoCommand {
@@ -25,32 +22,18 @@ fn parse_demo_command() -> DemoCommand {
     if args.iter().any(|a| a == "--preprocess") {
         return DemoCommand::Preprocess;
     }
-    if let Some(pos) = args.iter().position(|a| a == "--bench") {
-        let scene_str = args.get(pos + 1).map(String::as_str).unwrap_or("falling-spheres");
-        let count = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(100u32);
-        let scene = match scene_str {
-            "stacked-boxes" => BenchScene::StackedBoxes,
-            "chain-grid"    => BenchScene::ChainGrid,
-            _               => BenchScene::FallingSpheres,
-        };
-        return DemoCommand::Bench { scene, count };
-    }
-    if args.iter().any(|a| a == "--sim-raw") {
-        return DemoCommand::Sim(SimulationMode::Raw);
-    }
-    DemoCommand::Sim(SimulationMode::Precomputed)
+    DemoCommand::Sim
 }
 
 fn main() {
     match parse_demo_command() {
-        DemoCommand::Preprocess         => preprocess_concave_colliders(),
-        DemoCommand::Sim(mode)          => run_demo_sim(mode),
-        DemoCommand::Bench { scene, count } => run_bench_mode(SimulationMode::Bench { scene, count }),
+        DemoCommand::Preprocess => preprocess_concave_colliders(),
+        DemoCommand::Sim        => run_demo_sim(),
     }
 }
 
-fn run_demo_sim(mode: SimulationMode) {
-    random_physics_game_app(mode, GameAppConfig::default())
+fn run_demo_sim() {
+    random_physics_game_app(GameAppConfig::default())
         .add_systems(Startup, (spawn_demo_camera, setup_world))
         .run();
 }
@@ -86,7 +69,6 @@ fn spawn_demo_camera(mut commands: Commands, offscreen: Option<Res<plugins::reco
 
 fn setup_world(
     mut commands: Commands,
-    mode: Res<SimulationMode>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -100,7 +82,6 @@ fn setup_world(
             visual: Some(VisualDef::grass_green()),
             ..Default::default()
         },
-        &mode,
         &asset_server,
         &mut meshes,
         &mut materials,
@@ -109,13 +90,12 @@ fn setup_world(
     spawn_vehicle(
         &mut commands,
         VehicleDef { position: Vec3::new(5.2, 0.65, 0.0) },
-        &mode,
         &asset_server,
         &mut meshes,
         &mut materials,
     );
 
-    spawn_staircase(&mut commands, &asset_server, &mode, &mut meshes, &mut materials);
+    spawn_staircase(&mut commands, &asset_server, &mut meshes, &mut materials);
 
-    println!("[{}] setup_world: {:.2?}", mode.label(), start.elapsed());
+    println!("[demo] setup_world: {:.2?}", start.elapsed());
 }

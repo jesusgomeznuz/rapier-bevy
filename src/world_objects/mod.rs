@@ -2,15 +2,12 @@ pub(crate) mod colliders;
 mod staircase;
 mod vehicle;
 mod chain;
-mod bench;
 
-pub use bench::{spawn_chain_grid, spawn_falling_spheres, spawn_stacked_boxes};
 pub use colliders::preprocess_obj;
 pub use chain::{ChainDef, ChainPath, spawn_chain};
 pub use staircase::spawn_staircase;
 pub use vehicle::{VehicleDef, spawn_vehicle};
 
-use crate::modes::SimulationMode;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use bevy_mod_rounded_box::RoundedBox;
@@ -142,7 +139,6 @@ impl Default for ObjectDef {
 pub fn spawn_object(
     commands: &mut Commands,
     def: ObjectDef,
-    mode: &SimulationMode,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -188,7 +184,7 @@ pub fn spawn_object(
 
     let collider_border = def.visual.as_ref().and_then(|v| v.border_radius);
     let mut entity = commands.spawn((
-        colliders::build_collider(def.shape, collider_border, mode),
+        colliders::build_collider(def.shape, collider_border),
         Transform::from_translation(def.position).with_rotation(def.rotation),
     ));
 

@@ -4,10 +4,9 @@ use bevy::ecs::system::SystemParamValidationError;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use bevy_rapier3d::prelude::*;
-use bevy_rapier3d::render::RapierDebugRenderPlugin;
 use std::time::Duration;
 
-use crate::modes::{SimulationMode, debug_enabled, record_duration, timeline_path, write_timeline_duration};
+use crate::modes::{record_duration, timeline_path, write_timeline_duration};
 use crate::plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, WriteTimelinePlugin};
 
 pub struct GameAppConfig {
@@ -28,7 +27,7 @@ impl Default for GameAppConfig {
     }
 }
 
-pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> App {
+pub fn random_physics_game_app(config: GameAppConfig) -> App {
     let writing_timeline = write_timeline_duration();
 
     // El manejador global se fija ANTES de construir el App: Bevy lo cachea
@@ -65,13 +64,9 @@ pub fn random_physics_game_app(mode: SimulationMode, config: GameAppConfig) -> A
         }
         (None, None) => {
             add_physics(&mut app, config.seed);
-            if debug_enabled() {
-                app.add_plugins(RapierDebugRenderPlugin::default());
-            }
         }
     }
 
-    app.insert_resource(mode);
     app
 }
 

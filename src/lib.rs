@@ -5,11 +5,8 @@ pub mod timeline;
 pub mod world_objects;
 
 pub use engine::{GameAppConfig, random_physics_game_app};
-pub use modes::{
-    BenchScene, EngineMode, SimulationMode, debug_enabled, parse_engine_mode, record_duration,
-    session_duration_secs, timeline_path, write_timeline_duration,
-};
-pub use plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, WriteTimelinePlugin, run_bench_mode};
+pub use modes::{record_duration, session_duration_secs, timeline_path, write_timeline_duration};
+pub use plugins::{PhysicsStatsPlugin, PlayPlugin, RecordPlugin, WriteTimelinePlugin};
 pub use timeline::{
     Dice, EventBand, PlayEvent, Pose, Timeline, TimelineEvents, TimelineKey, TimelineVocabulary,
     run_the_event_band,
